@@ -78,12 +78,22 @@ export default async function OptionsPage({
         <Alert>
           <SearchX aria-hidden />
           <AlertTitle>Live research is unavailable</AlertTitle>
-          <AlertDescription>
-            No search provider is connected, so there are no real-time results,
-            prices, or availability. {ASSISTANT_NAME} can still suggest ideas
-            from general knowledge, marked as unverified. Add anything you find
-            yourself, with a link to the source.
-          </AlertDescription>
+          {research.unavailableReason ? (
+            <AlertDescription data-testid="research-unavailable-reason">
+              {research.label} is selected but cannot run:{" "}
+              {research.unavailableReason} There are no real-time results,
+              prices, or availability. {ASSISTANT_NAME} can still suggest ideas
+              from general knowledge, marked as unverified. Add anything you
+              find yourself, with a link to the source.
+            </AlertDescription>
+          ) : (
+            <AlertDescription>
+              No search provider is connected, so there are no real-time
+              results, prices, or availability. {ASSISTANT_NAME} can still
+              suggest ideas from general knowledge, marked as unverified. Add
+              anything you find yourself, with a link to the source.
+            </AlertDescription>
+          )}
         </Alert>
       ) : null}
       <OptionsToolbar />

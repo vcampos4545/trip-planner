@@ -129,6 +129,14 @@ export default async function PlanPage({
           <div className="mt-3 border-t pt-3">
             {research.isConfigured ? (
               <Pill tone="confirmed">Live search: {research.label}</Pill>
+            ) : research.unavailableReason ? (
+              <p className="text-xs text-muted-foreground">
+                <Pill tone="warning">Live search unavailable</Pill>{" "}
+                <span className="mt-1 block">
+                  {research.unavailableReason} {ASSISTANT_NAME} can suggest
+                  ideas, but they come without live prices or availability.
+                </span>
+              </p>
             ) : (
               <p className="text-xs text-muted-foreground">
                 <Pill tone="neutral">Live search off</Pill>{" "}

@@ -37,6 +37,13 @@ export type ChatEffect = {
   entityId?: string;
 };
 
+export type ChatSource = {
+  title: string;
+  url: string;
+  sourceName: string;
+  retrievedAt: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: "USER" | "ASSISTANT" | "NOTICE";
@@ -44,6 +51,7 @@ export type ChatMessage = {
   model: string | null;
   createdAt: string;
   effects: ChatEffect[];
+  sources?: ChatSource[];
   pending?: boolean;
 };
 
@@ -233,6 +241,7 @@ function MessageItem({ message }: { message: ChatMessage }) {
           <EffectList
             effects={message.effects.filter((effect) => effect.kind !== "read")}
           />
+          <SourceList sources={message.sources ?? []} />
           {message.model ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -248,6 +257,33 @@ function MessageItem({ message }: { message: ChatMessage }) {
     >
       <RichText text={message.content} />
     </AssistantBubble>
+  );
+}
+
+function SourceList({ sources }: { sources: ChatSource[] }) {
+  if (sources.length === 0) return null;
+  return (
+    <div className="space-y-1 text-xs" data-testid="atlas-sources">
+      <p className="font-medium text-muted-foreground">
+        Live search sources, retrieved{" "}
+        {formatTimestamp(sources[0]!.retrievedAt)}
+      </p>
+      <ol className="list-decimal space-y-0.5 pl-5">
+        {sources.map((source) => (
+          <li key={source.url}>
+            <a
+              href={source.url}
+              target="_blank"
+              rel="noopener noreferrer nofollow"
+              className="text-primary underline underline-offset-2 hover:no-underline"
+            >
+              {source.title}
+            </a>{" "}
+            <span className="text-muted-foreground">({source.sourceName})</span>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 

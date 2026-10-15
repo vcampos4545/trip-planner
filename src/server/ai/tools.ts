@@ -38,6 +38,7 @@ import type { CurrentUser } from "@/server/auth/session";
 import { db } from "@/server/db";
 import { DomainError } from "@/server/errors";
 import {
+  ResearchFailedError,
   ResearchUnavailableError,
   type ResearchProvider,
   type ResearchResult,
@@ -620,7 +621,7 @@ const summarizeOutstanding = defineTool({
 const searchOptions = defineTool({
   name: "search_options",
   description:
-    "Search the configured research provider for destinations, stays, activities, food, or transport. Returns live results with sources and retrieval time, or says that live search is unavailable.",
+    "Search the live research provider for destinations, stays, activities, food, or transport. Use it only when the request needs current information from the web, such as prices, availability, opening hours, or recent places; each search has a cost. Returns results with source links and retrieval time, or says that live search is unavailable or failed.",
   args: z.object({
     category: z.enum(OptionCategory),
     query: z.string().describe("What to look for, in plain words."),
@@ -642,6 +643,7 @@ const searchOptions = defineTool({
       const listed = results.slice(0, 6).map((result, index) => {
         const id = `r${context.searchResults.size + index + 1}`;
         context.searchResults.set(id, result);
+        const retrievedAt = result.retrievedAt.toISOString();
         return {
           resultId: id,
           title: result.title,
@@ -649,9 +651,21 @@ const searchOptions = defineTool({
           url: result.url,
           source: result.sourceName,
           price: result.priceAmount
-            ? `${result.priceAmount} ${result.priceCurrency ?? ""} ${result.priceUnit ?? ""}`.trim()
+            ? {
+                amount:
+                  `${result.priceAmount} ${result.priceCurrency ?? ""} ${result.priceUnit ? `per ${result.priceUnit}` : ""}`.trim(),
+                statedBy: result.sourceName,
+                retrievedAt,
+              }
             : null,
-          retrievedAt: result.retrievedAt.toISOString(),
+          availability: result.availabilityNote
+            ? {
+                note: result.availabilityNote,
+                statedBy: result.sourceName,
+                retrievedAt,
+              }
+            : null,
+          retrievedAt,
         };
       });
       context.effects.push({
@@ -664,6 +678,10 @@ const searchOptions = defineTool({
         available: true,
         provider: context.research.label,
         results: listed,
+        note:
+          listed.length === 0
+            ? "No live results with a source were found."
+            : "Cite results you mention as Markdown links to their url. Prices and availability are only as stated by that source at retrievedAt.",
       };
     } catch (error) {
       if (error instanceof ResearchUnavailableError) {
@@ -671,14 +689,34 @@ const searchOptions = defineTool({
           tool: this.name,
           ok: false,
           kind: "searched",
-          summary: "Live search is not configured",
+          summary:
+            context.research.id === "none"
+              ? "Live search is not configured"
+              : "Live research is unavailable",
         });
         return { available: false, message: error.message };
       }
-      throw new DomainError(
-        "UNAVAILABLE",
-        "The research provider returned an error. No results are available right now.",
-      );
+      if (!(error instanceof ResearchFailedError)) {
+        console.error(
+          "[atlas] research provider failed:",
+          error instanceof Error ? error.message : "unknown",
+        );
+      }
+      const reason =
+        error instanceof ResearchFailedError
+          ? error.message
+          : "The research provider returned an error.";
+      context.effects.push({
+        tool: this.name,
+        ok: false,
+        kind: "error",
+        summary: `Live research failed: ${reason}`,
+      });
+      return {
+        available: false,
+        failed: true,
+        message: `Live research failed: ${reason} No live results are available right now. Tell the user, and do not present general knowledge as live results.`,
+      };
     }
   },
 });
@@ -747,7 +785,7 @@ const saveOption = defineTool({
         priceAmount: source?.priceAmount ?? null,
         priceCurrency: source?.priceCurrency ?? null,
         priceUnit: source?.priceUnit ?? null,
-        priceNote: null,
+        priceNote: source ? statedByNote(source) : null,
         locationName:
           args.locationName?.slice(0, 200) ?? source?.locationName ?? null,
         address: null,
@@ -773,6 +811,21 @@ const saveOption = defineTool({
     return { saved: true, optionId: option.id, status: option.status };
   },
 });
+
+/** Labels a live price or availability with the source that stated it and when. */
+function statedByNote(source: ResearchResult) {
+  const parts = [
+    source.priceAmount ? "Price as stated" : null,
+    source.availabilityNote
+      ? `Availability: ${source.availabilityNote.slice(0, 160)}`
+      : null,
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  return `${parts.join(". ")} (${source.sourceName}, retrieved ${source.retrievedAt.toISOString().slice(0, 16).replace("T", " ")} UTC)`.slice(
+    0,
+    300,
+  );
+}
 
 const listSavedOptions = defineTool({
   name: "list_saved_research",
