@@ -7,6 +7,27 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-15
+
+### Added
+
+- Live research through OpenAI's hosted web search tool, selected with
+  `RESEARCH_PROVIDER="openai_web"` and using the existing `OPENAI_API_KEY`. Optional
+  `OPENAI_WEB_SEARCH_MODEL` and `OPENAI_WEB_SEARCH_CONTEXT_SIZE` settings.
+- Saved web results keep their source URL, source name, and retrieval time, and are labelled
+  "Live result". Prices and availability are kept only when the cited page stated them, with a
+  note naming the source and retrieval time.
+- Atlas replies that use web search link their citations inline and list the sources under the
+  reply.
+
+### Changed
+
+- Atlas searches only when a request needs current information from the web.
+- When live research is selected but cannot run (missing key or unknown provider), the Options
+  and Plan tabs say it is unavailable and why. A failed search shows "Live research failed" and
+  never falls back to presenting model knowledge as live results.
+- Atlas replies render Markdown links (`http` and `https` only).
+
 ## [0.1.0] - 2026-10-15
 
 First MVP release.

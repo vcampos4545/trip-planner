@@ -13,7 +13,11 @@ import type { CurrentUser } from "@/server/auth/session";
 import { db } from "@/server/db";
 import { conflict, DomainError, invalid } from "@/server/errors";
 import { checkRateLimit } from "@/server/rate-limit";
-import { getResearchProvider, type ResearchProvider } from "@/server/research";
+import {
+  getResearchProvider,
+  type ResearchProvider,
+  type ResearchResult,
+} from "@/server/research";
 import { getOwnConversation } from "@/server/services/conversations";
 import { tripToDetails } from "@/server/services/trip-mapping";
 import { createTripFromDraft } from "@/server/services/trips";
@@ -39,8 +43,17 @@ const HISTORY_TURNS = 30;
 const MAX_TOOL_ROUNDS = 5;
 const REPLY_TIMEOUT_MS = 90_000;
 
+/** A live search result the reply drew on, shown under the reply as a citation link. */
+export type MessageSource = {
+  title: string;
+  url: string;
+  sourceName: string;
+  retrievedAt: string;
+};
+
 export type MessageMetadata = {
   effects?: ToolEffect[];
+  sources?: MessageSource[];
   error?: ProviderErrorKind;
 };
 
@@ -167,6 +180,7 @@ export async function sendAtlasMessage(
     memberNames,
     userName: user.name,
     researchAvailable: research.isConfigured,
+    researchUnavailableReason: research.unavailableReason ?? null,
   });
 
   let replied = false;
@@ -179,6 +193,10 @@ export async function sendAtlasMessage(
       maxToolRounds: MAX_TOOL_ROUNDS,
       signal: AbortSignal.timeout(REPLY_TIMEOUT_MS),
     });
+    const sources =
+      context.phase === "trip"
+        ? sourcesFrom(context.searchResults.values())
+        : [];
     await db.message.create({
       data: {
         conversationId: conversation.id,
@@ -187,6 +205,7 @@ export async function sendAtlasMessage(
         model: `${provider.id}:${result.model}`,
         metadata: {
           effects,
+          ...(sources.length > 0 ? { sources } : {}),
         } satisfies MessageMetadata as unknown as Prisma.InputJsonValue,
       },
     });
@@ -233,6 +252,20 @@ export async function sendAtlasMessage(
     return { replied, tripId, tripCreated: true, effects };
   }
   return { replied, tripId: conversation.tripId, tripCreated: false, effects };
+}
+
+function sourcesFrom(results: Iterable<ResearchResult>): MessageSource[] {
+  const sources = new Map<string, MessageSource>();
+  for (const result of results) {
+    if (!result.url || sources.has(result.url)) continue;
+    sources.set(result.url, {
+      title: result.title,
+      url: result.url,
+      sourceName: result.sourceName,
+      retrievedAt: result.retrievedAt.toISOString(),
+    });
+  }
+  return [...sources.values()];
 }
 
 async function loadHistory(conversationId: string): Promise<ChatTurn[]> {

@@ -105,7 +105,7 @@ Defined in `src/server/ai/tools.ts`, each with a Zod schema that doubles as a st
 | --------------------------------- | -------------------------------------------------------------- |
 | `get_trip_state`                  | Read the shared trip record                                    |
 | `update_trip_details`             | Fill unknown details; changes to known values become proposals |
-| `search_options`                  | Query the research provider                                    |
+| `search_options`                  | Query the research provider (only when current info is needed) |
 | `save_research_option`            | Save a suggestion, with provenance if it came from a search    |
 | `list_saved_research`             | Reuse what the group already saved                             |
 | `suggest_task`                    | Create a task in "suggested" state                             |
@@ -125,6 +125,12 @@ Rules enforced in code, not just in the prompt:
 - Proposed itinerary items must fall within the trip dates and carry a rationale and caveats.
 - The UI shows the tool effects under each reply, so what Atlas says it did can be checked against
   what actually happened.
+- When a reply follows live searches, the orchestrator stores the results' titles, URLs, source
+  names, and retrieval times in the message metadata (`sources`), and the chat lists them as links
+  under the reply. Atlas is also told to cite results inline as Markdown links.
+- A failed search is returned to the model as `{ available: false, failed: true }` and recorded as
+  a "Live research failed" effect. A provider that is selected but cannot run reports "Live
+  research is unavailable". In both cases nothing is saved as a live result.
 
 ### Adding an LLM provider
 
@@ -141,11 +147,51 @@ rounds.
 
 ## Research providers
 
-`src/server/research/types.ts` defines `ResearchProvider`. The only implementation today is
-`NotConfiguredResearchProvider`, which reports that live research is unavailable. The Options tab
-and Atlas both say so, and manual entry always works.
+`src/server/research/types.ts` defines `ResearchProvider`. `getResearchProvider()` in
+`src/server/research/index.ts` picks one from `RESEARCH_PROVIDER`:
 
-To add a live provider:
+| Value                                     | Provider                        | Behavior                                         |
+| ----------------------------------------- | ------------------------------- | ------------------------------------------------ |
+| `none` or unset                           | `NotConfiguredResearchProvider` | Live research is off. Manual entry always works  |
+| `openai_web`                              | `OpenAiWebResearchProvider`     | OpenAI hosted web search. Needs `OPENAI_API_KEY` |
+| `openai_web`, no key, or an unknown value | `UnavailableResearchProvider`   | Reports why live research is unavailable         |
+
+A provider that is selected but cannot run never falls back to anything else. The Options tab,
+the Plan tab, and Atlas's instructions all show the reason.
+
+### OpenAI web search
+
+`src/server/research/openai-web.ts` makes one Responses API request per `search_options` call:
+
+- `tools: [{ type: "web_search", search_context_size }]` with `tool_choice: "required"`, so the
+  search always runs, and `include: ["web_search_call.action.sources"]`, so the response lists
+  every URL the search consulted.
+- A strict JSON schema (`text.format`) for the results: title, URL, source name, description,
+  location, and a price and availability that are only filled when the page stated them.
+- `store: false`, like Atlas's own requests.
+
+The response is checked before anything reaches Atlas:
+
+- If no `web_search_call` ran, or the output is not the expected JSON, the search fails with
+  `ResearchFailedError`.
+- A result is kept only if its URL matches a consulted source (`web_search_call.action.sources`) or
+  a `url_citation` annotation. Matching ignores `utm_*` parameters, `www.`, fragments, and a
+  trailing slash. Everything else is dropped.
+- Prices must be a plain amount with a three-letter currency code, or they are dropped.
+- `retrievedAt` is the time the response arrived. The payload keeps the cited URL, the search
+  queries, the model, and the response ID, and is stored as the option's `providerPayload`.
+
+When Atlas saves a result, the option gets `origin = RESEARCH_PROVIDER` (labelled "Live result"),
+the URL, source name, price, and retrieval time from the provider, and a price note such as "Price
+as stated (Source, retrieved 2026-10-15 09:30 UTC)".
+
+Cost control: the search is a separate tool that Atlas calls only when a request needs current
+external information (its instructions say so, and the tool description says each search has a
+cost). Ordinary turns never run a web search. The context size defaults to `low`. Structured
+outputs can suppress citation annotations, which is why consulted sources are requested with
+`include` and used as the main check.
+
+To add another live provider:
 
 1. Implement `search(query)` and return `ResearchResult` objects. Only include prices that the
    vendor returned, and set `retrievedAt` to the time of the call.
@@ -168,8 +214,11 @@ provider tokens are kept, and recommendations rely only on data the provider act
   can be revoked, and can have a use limit that is enforced atomically.
 - Sensitive endpoints (Atlas messages, invite creation, invite acceptance) have an in-memory rate
   limit.
-- Model output is rendered as text nodes, never as HTML. Links from users or providers open with
-  `rel="noopener noreferrer nofollow"`, and only `http(s)` URLs are accepted.
+- Model output is rendered as React nodes, never as HTML. Markdown links in Atlas replies become
+  links only for `http(s)` URLs. Links from users, providers, or Atlas open with
+  `rel="noopener noreferrer nofollow"`.
+- Web page text returned by search is treated as data. The search request tells the model to
+  ignore instructions inside pages, and only URLs the search consulted are kept.
 - `callbackUrl` values are restricted to same-site paths.
 - Baseline security headers are set in `next.config.ts`.
 
@@ -180,3 +229,5 @@ provider tokens are kept, and recommendations rely only on data the provider act
   PostgreSQL test database, with a scripted provider standing in for the model.
 - Playwright drives the production build for the acceptance flows. Atlas runs through the real
   OpenAI provider pointed at a local stub of the Responses API (`e2e/support/openai-stub.mjs`).
+  The stub also answers `web_search` requests with canned sources and citations, including one
+  uncited result that the app must drop, and can simulate a failed search.

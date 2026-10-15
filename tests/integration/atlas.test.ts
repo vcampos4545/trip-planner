@@ -5,6 +5,11 @@ import { requireTripAccess } from "@/server/access";
 import { sendAtlasMessage } from "@/server/ai/orchestrator";
 import { LlmProviderError } from "@/server/ai/types";
 import { DomainError } from "@/server/errors";
+import {
+  ResearchFailedError,
+  type ResearchProvider,
+  type ResearchResult,
+} from "@/server/research";
 import { resetRateLimits } from "@/server/rate-limit";
 import {
   startCreationConversation,
@@ -431,5 +436,161 @@ describe("planning on a shared trip", () => {
         provider: new ScriptedProvider([]),
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("saves a live web result with its source, stated price, and retrieval time, and cites it under the reply", async () => {
+    const { organizer, trip, conversation } = await tripWithConversation();
+    const retrievedAt = new Date("2026-10-15T09:30:00.000Z");
+    const live: ResearchResult = {
+      title: "Casa do Azulejo",
+      description: "Guesthouse in Alfama.",
+      url: "https://stays.example/casa-do-azulejo",
+      sourceName: "Stays Example",
+      priceAmount: "145",
+      priceCurrency: "EUR",
+      priceUnit: "night",
+      availabilityNote: "Two rooms left for May 20 to 24",
+      locationName: "Alfama, Lisbon",
+      latitude: null,
+      longitude: null,
+      retrievedAt,
+      payload: {
+        provider: "openai_web",
+        citedUrl: "https://stays.example/casa-do-azulejo",
+      },
+    };
+    const research: ResearchProvider = {
+      id: "openai_web",
+      label: "OpenAI web search",
+      isConfigured: true,
+      search: async () => [live],
+    };
+    const provider = new ScriptedProvider([
+      {
+        calls: [
+          {
+            name: "search_options",
+            args: {
+              category: "LODGING",
+              query: "guesthouse in Alfama",
+              location: "Lisbon",
+            },
+          },
+          {
+            name: "save_research_option",
+            args: {
+              category: "LODGING",
+              title: "Casa do Azulejo",
+              description: null,
+              rationale: "Central and within budget.",
+              sourceResultId: "r1",
+              locationName: null,
+            },
+          },
+        ],
+        reply:
+          "I found [Casa do Azulejo](https://stays.example/casa-do-azulejo).",
+      },
+    ]);
+    await sendAtlasMessage(organizer, conversation.id, "Find a guesthouse", {
+      provider,
+      research,
+    });
+
+    const search = provider.toolOutputs[0]!.output as {
+      result: { results: Record<string, unknown>[] };
+    };
+    expect(search.result.results[0]).toMatchObject({
+      resultId: "r1",
+      url: live.url,
+      price: { amount: "145 EUR per night", statedBy: "Stays Example" },
+      availability: { note: "Two rooms left for May 20 to 24" },
+    });
+    const option = await db.researchOption.findFirstOrThrow({
+      where: { tripId: trip.id },
+    });
+    expect(option).toMatchObject({
+      origin: "RESEARCH_PROVIDER",
+      status: "SUGGESTED",
+      url: live.url,
+      sourceName: "Stays Example",
+      priceCurrency: "EUR",
+      priceUnit: "night",
+      retrievedAt,
+      locationName: "Alfama, Lisbon",
+    });
+    expect(option.priceAmount?.toString()).toBe("145");
+    expect(option.priceNote).toContain(
+      "Stays Example, retrieved 2026-10-15 09:30 UTC",
+    );
+    expect(option.priceNote).toContain("Two rooms left");
+    expect(option.providerPayload).toMatchObject({ provider: "openai_web" });
+
+    const reply = await db.message.findFirstOrThrow({
+      where: { conversationId: conversation.id, role: "ASSISTANT" },
+    });
+    expect(reply.metadata).toMatchObject({
+      sources: [
+        {
+          title: "Casa do Azulejo",
+          url: live.url,
+          sourceName: "Stays Example",
+          retrievedAt: retrievedAt.toISOString(),
+        },
+      ],
+    });
+  });
+
+  it("reports a failed live search to Atlas without saving anything or attaching sources", async () => {
+    const { organizer, trip, conversation } = await tripWithConversation();
+    const research: ResearchProvider = {
+      id: "openai_web",
+      label: "OpenAI web search",
+      isConfigured: true,
+      search: async () => {
+        throw new ResearchFailedError("Could not reach OpenAI web search.");
+      },
+    };
+    const provider = new ScriptedProvider([
+      {
+        calls: [
+          {
+            name: "search_options",
+            args: { category: "LODGING", query: "hotels", location: "Lisbon" },
+          },
+        ],
+        reply: "Live research failed, so I have no live results right now.",
+      },
+    ]);
+    await sendAtlasMessage(organizer, conversation.id, "Find hotels", {
+      provider,
+      research,
+    });
+    expect(provider.toolOutputs[0]!.output).toMatchObject({
+      ok: true,
+      result: {
+        available: false,
+        failed: true,
+        message: expect.stringContaining(
+          "Live research failed: Could not reach OpenAI web search.",
+        ),
+      },
+    });
+    expect(await db.researchOption.count({ where: { tripId: trip.id } })).toBe(
+      0,
+    );
+    const reply = await db.message.findFirstOrThrow({
+      where: { conversationId: conversation.id, role: "ASSISTANT" },
+    });
+    expect(reply.metadata).not.toHaveProperty("sources");
+    expect(reply.metadata).toMatchObject({
+      effects: [
+        expect.objectContaining({
+          ok: false,
+          kind: "error",
+          summary: "Live research failed: Could not reach OpenAI web search.",
+        }),
+      ],
+    });
   });
 });

@@ -1,4 +1,4 @@
-import type { ChatEffect, ChatMessage } from "./atlas-chat";
+import type { ChatEffect, ChatMessage, ChatSource } from "./atlas-chat";
 
 type StoredMessage = {
   id: string;
@@ -27,6 +27,27 @@ function effectsOf(metadata: unknown): ChatEffect[] {
     }));
 }
 
+function sourcesOf(metadata: unknown): ChatSource[] {
+  if (!metadata || typeof metadata !== "object" || !("sources" in metadata))
+    return [];
+  const sources = (metadata as { sources: unknown }).sources;
+  if (!Array.isArray(sources)) return [];
+  return sources
+    .filter(
+      (source): source is ChatSource =>
+        typeof source === "object" &&
+        source !== null &&
+        typeof source.url === "string" &&
+        /^https?:\/\//i.test(source.url),
+    )
+    .map((source) => ({
+      title: String(source.title),
+      url: source.url,
+      sourceName: String(source.sourceName),
+      retrievedAt: String(source.retrievedAt),
+    }));
+}
+
 export function toChatMessages(messages: StoredMessage[]): ChatMessage[] {
   return messages.map((message) => ({
     id: message.id,
@@ -35,5 +56,6 @@ export function toChatMessages(messages: StoredMessage[]): ChatMessage[] {
     model: message.model,
     createdAt: message.createdAt.toISOString(),
     effects: effectsOf(message.metadata),
+    sources: sourcesOf(message.metadata),
   }));
 }

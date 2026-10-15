@@ -1,9 +1,9 @@
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 
 /**
  * Renders the small subset of Markdown that chat replies use (paragraphs, bullet and numbered
- * lists, bold). Everything is rendered as React text nodes, so model output can never inject
- * HTML.
+ * lists, bold, and http(s) links for citations). Everything is rendered as React nodes, so model
+ * output can never inject HTML, and links only ever point at http or https URLs.
  */
 export function RichText({ text }: { text: string }) {
   const blocks = text.replace(/\r\n/g, "\n").split(/\n{2,}/);
@@ -54,7 +54,34 @@ function Block({ block }: { block: string }) {
   );
 }
 
+const LINK_PATTERN = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
+
 function Inline({ text }: { text: string }) {
+  const nodes: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(LINK_PATTERN)) {
+    const index = match.index ?? 0;
+    if (index > last)
+      nodes.push(<Bold key={last} text={text.slice(last, index)} />);
+    nodes.push(
+      <a
+        key={index}
+        href={match[2]}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        className="text-primary underline underline-offset-2 hover:no-underline"
+      >
+        {match[1]}
+      </a>,
+    );
+    last = index + match[0].length;
+  }
+  if (last < text.length)
+    nodes.push(<Bold key={last} text={text.slice(last)} />);
+  return <>{nodes}</>;
+}
+
+function Bold({ text }: { text: string }) {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
   return (
     <>

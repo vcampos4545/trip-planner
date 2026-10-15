@@ -2,15 +2,18 @@ import { defineConfig, devices } from "@playwright/test";
 
 /**
  * End-to-end tests run against a production build (`.next-e2e`) and the test database.
- * Two app servers share that build: one with Atlas pointed at a local OpenAI stub, one with no AI
- * key at all. Sign-in sessions are inserted straight into the test database by the fixtures, so
- * the app itself has no test-only sign-in path.
+ * Four app servers share that build: Atlas pointed at a local OpenAI stub with live search off,
+ * the same with OpenAI web search on (also served by the stub), web search selected without an
+ * API key, and no AI key at all. Sign-in sessions are inserted straight into the test database by
+ * the fixtures, so the app itself has no test-only sign-in path.
  */
 const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgresql://trip:trip@localhost:5433/trip_planner_test?schema=public";
 const AI_PORT = 3310;
 const NO_AI_PORT = 3311;
+const WEB_SEARCH_PORT = 3312;
+const WEB_SEARCH_NO_KEY_PORT = 3313;
 const STUB_PORT = 3319;
 
 const sharedEnv = {
@@ -42,8 +45,18 @@ export default defineConfig({
   projects: [
     {
       name: "with-atlas",
-      testIgnore: /no-ai\.spec\.ts/,
+      testIgnore: [/no-ai\.spec\.ts/, /web-search.*\.spec\.ts/],
       use: { baseURL: `http://localhost:${AI_PORT}` },
+    },
+    {
+      name: "with-web-search",
+      testMatch: /web-search\.spec\.ts/,
+      use: { baseURL: `http://localhost:${WEB_SEARCH_PORT}` },
+    },
+    {
+      name: "web-search-without-key",
+      testMatch: /web-search-no-key\.spec\.ts/,
+      use: { baseURL: `http://localhost:${WEB_SEARCH_NO_KEY_PORT}` },
     },
     {
       name: "without-ai",
@@ -69,6 +82,33 @@ export default defineConfig({
         OPENAI_API_KEY: "e2e-stub-key",
         OPENAI_MODEL: "gpt-e2e-stub",
         OPENAI_BASE_URL: `http://127.0.0.1:${STUB_PORT}/v1`,
+      },
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command: `pnpm exec next start --port ${WEB_SEARCH_PORT}`,
+      url: `http://localhost:${WEB_SEARCH_PORT}/signin`,
+      env: {
+        ...sharedEnv,
+        AUTH_URL: `http://localhost:${WEB_SEARCH_PORT}`,
+        AI_PROVIDER: "openai",
+        OPENAI_API_KEY: "e2e-stub-key",
+        OPENAI_MODEL: "gpt-e2e-stub",
+        OPENAI_BASE_URL: `http://127.0.0.1:${STUB_PORT}/v1`,
+        RESEARCH_PROVIDER: "openai_web",
+      },
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command: `pnpm exec next start --port ${WEB_SEARCH_NO_KEY_PORT}`,
+      url: `http://localhost:${WEB_SEARCH_NO_KEY_PORT}/signin`,
+      env: {
+        ...sharedEnv,
+        AUTH_URL: `http://localhost:${WEB_SEARCH_NO_KEY_PORT}`,
+        OPENAI_API_KEY: "",
+        RESEARCH_PROVIDER: "openai_web",
       },
       reuseExistingServer: false,
       timeout: 120_000,
