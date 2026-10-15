@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 
 import {
   FieldShell,
@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { TaskPriority } from "@/generated/prisma/enums";
+import { useControllableOpen } from "@/hooks/use-controllable-open";
 import { useZodForm } from "@/hooks/use-zod-form";
 import { TASK_PRIORITY_LABELS } from "@/lib/labels";
 import { taskFormSchema, type TaskFormInput } from "@/lib/validation/task";
@@ -47,20 +48,24 @@ export const EMPTY_TASK: TaskFormInput = {
 export function TaskFormDialog({
   tripId,
   trigger,
+  open: openProp,
+  onOpenChange,
   choices,
   initial = EMPTY_TASK,
   editing,
 }: {
   tripId: string;
-  trigger: React.ReactNode;
+  trigger?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   choices: RelatedChoices;
   initial?: TaskFormInput;
   editing?: { id: string; version: number };
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useControllableOpen(openProp, onOpenChange);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{editing ? "Edit task" : "New task"}</DialogTitle>

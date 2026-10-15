@@ -296,6 +296,7 @@ function TaskRow({
   choices: RelatedChoices;
   canDelete: boolean;
 }) {
+  const [dialog, setDialog] = useState<"edit" | "delete" | null>(null);
   const { run, pending } = useAction();
   const completed = task.status === "COMPLETED";
   const overdue =
@@ -444,52 +445,54 @@ function TaskRow({
                 Reopen
               </DropdownMenuItem>
             ) : null}
-            <TaskFormDialog
-              tripId={tripId}
-              choices={choices}
-              editing={{ id: task.id, version: task.version }}
-              initial={{
-                title: task.title,
-                description: task.description ?? "",
-                priority: task.priority,
-                dueDate: task.dueDate?.slice(0, 10) ?? "",
-                assigneeMemberId: task.assignee?.id ?? "",
-                relatedOptionId: task.relatedOption?.id ?? "",
-                relatedBookingId: task.relatedBooking?.id ?? "",
-                relatedEventId: task.relatedEvent?.id ?? "",
-              }}
-              trigger={
-                <DropdownMenuItem onSelect={(event) => event.preventDefault()}>
-                  <Pencil aria-hidden />
-                  Edit
-                </DropdownMenuItem>
-              }
-            />
+            <DropdownMenuItem onSelect={() => setDialog("edit")}>
+              <Pencil aria-hidden />
+              Edit
+            </DropdownMenuItem>
             {canDelete ? (
               <>
                 <DropdownMenuSeparator />
-                <ConfirmAction
-                  title={`Delete "${task.title}"?`}
-                  description="The task is removed for everyone. Consider cancelling it instead to keep a record."
-                  onConfirm={() =>
-                    run(() => deleteTaskAction(tripId, task.id), {
-                      success: "Task deleted",
-                    })
-                  }
-                  trigger={
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onSelect={(event) => event.preventDefault()}
-                    >
-                      <Trash2 aria-hidden />
-                      Delete
-                    </DropdownMenuItem>
-                  }
-                />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => setDialog("delete")}
+                >
+                  <Trash2 aria-hidden />
+                  Delete
+                </DropdownMenuItem>
               </>
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+        <TaskFormDialog
+          tripId={tripId}
+          choices={choices}
+          editing={{ id: task.id, version: task.version }}
+          initial={{
+            title: task.title,
+            description: task.description ?? "",
+            priority: task.priority,
+            dueDate: task.dueDate?.slice(0, 10) ?? "",
+            assigneeMemberId: task.assignee?.id ?? "",
+            relatedOptionId: task.relatedOption?.id ?? "",
+            relatedBookingId: task.relatedBooking?.id ?? "",
+            relatedEventId: task.relatedEvent?.id ?? "",
+          }}
+          open={dialog === "edit"}
+          onOpenChange={(open) => setDialog(open ? "edit" : null)}
+        />
+        {canDelete ? (
+          <ConfirmAction
+            open={dialog === "delete"}
+            onOpenChange={(open) => setDialog(open ? "delete" : null)}
+            title={`Delete "${task.title}"?`}
+            description="The task is removed for everyone. Consider cancelling it instead to keep a record."
+            onConfirm={() =>
+              run(() => deleteTaskAction(tripId, task.id), {
+                success: "Task deleted",
+              })
+            }
+          />
+        ) : null}
       </div>
     </li>
   );

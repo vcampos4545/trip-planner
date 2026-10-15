@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { Controller, useFieldArray } from "react-hook-form";
 
 import {
@@ -27,6 +27,7 @@ import {
   BookingStatus,
   CostSplit,
 } from "@/generated/prisma/enums";
+import { useControllableOpen } from "@/hooks/use-controllable-open";
 import { useZodForm } from "@/hooks/use-zod-form";
 import {
   BOOKING_CATEGORY_SINGULAR,
@@ -52,6 +53,7 @@ export function BookingFormDialog({
   members,
   options,
   defaultOpen = false,
+  open: openProp,
   onOpenChange,
 }: {
   tripId: string;
@@ -61,17 +63,16 @@ export function BookingFormDialog({
   members: Member[];
   options: { id: string; title: string }[];
   defaultOpen?: boolean;
+  open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useControllableOpen(
+    openProp,
+    onOpenChange,
+    defaultOpen,
+  );
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        onOpenChange?.(next);
-      }}
-    >
+    <Dialog open={open} onOpenChange={setOpen}>
       {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
@@ -90,10 +91,7 @@ export function BookingFormDialog({
             editing={editing}
             members={members}
             options={options}
-            onDone={() => {
-              setOpen(false);
-              onOpenChange?.(false);
-            }}
+            onDone={() => setOpen(false)}
           />
         ) : null}
       </DialogContent>

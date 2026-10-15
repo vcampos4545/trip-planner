@@ -76,6 +76,7 @@ export function MembersCard({
   defaultTtlDays: number;
 }) {
   const { run, pending } = useAction();
+  const [removing, setRemoving] = useState<MemberView | null>(null);
   return (
     <section
       aria-labelledby="members-heading"
@@ -148,30 +149,32 @@ export function MembersCard({
                       ? "Make regular member"
                       : "Make organizer"}
                   </DropdownMenuItem>
-                  <ConfirmAction
-                    title={`Remove ${member.user.name ?? "this member"}?`}
-                    description="They will lose access to this trip. Bookings they were part of keep their history."
-                    confirmLabel="Remove"
-                    onConfirm={() =>
-                      run(() => removeMemberAction(tripId, member.id), {
-                        success: "Member removed",
-                      })
-                    }
-                    trigger={
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onSelect={(event) => event.preventDefault()}
-                      >
-                        Remove from trip
-                      </DropdownMenuItem>
-                    }
-                  />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={() => setRemoving(member)}
+                  >
+                    Remove from trip
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : null}
           </li>
         ))}
       </ul>
+      <ConfirmAction
+        open={removing !== null}
+        onOpenChange={(open) => !open && setRemoving(null)}
+        title={`Remove ${removing?.user.name ?? "this member"}?`}
+        description="They will lose access to this trip. Bookings they were part of keep their history."
+        confirmLabel="Remove"
+        onConfirm={() => {
+          const target = removing;
+          if (target)
+            run(() => removeMemberAction(tripId, target.id), {
+              success: "Member removed",
+            });
+        }}
+      />
 
       {isOrganizer && invitations.length > 0 ? (
         <div className="mt-4 border-t pt-3">

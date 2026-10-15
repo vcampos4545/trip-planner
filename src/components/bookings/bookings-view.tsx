@@ -16,6 +16,7 @@ import {
   UserMinus,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import { ConfirmAction } from "@/components/shared/confirm-button";
 import { BookingStatusBadge, Pill } from "@/components/shared/status-badge";
@@ -275,6 +276,7 @@ function BookingCard({
   currentMemberId: string;
   canDelete: boolean;
 }) {
+  const [dialog, setDialog] = useState<"edit" | "delete" | null>(null);
   const { run, pending } = useAction();
   const cost = formatMoneyValue(booking.costAmount, booking.currency);
   const start = when(booking.startDate, booking.startMinute);
@@ -319,46 +321,46 @@ function BookingCard({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <BookingFormDialog
-                tripId={tripId}
-                initial={toFormInput(booking)}
-                editing={{ id: booking.id, version: booking.version }}
-                members={members}
-                options={options}
-                trigger={
-                  <DropdownMenuItem
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    <Pencil aria-hidden />
-                    Edit
-                  </DropdownMenuItem>
-                }
-              />
+              <DropdownMenuItem onSelect={() => setDialog("edit")}>
+                <Pencil aria-hidden />
+                Edit
+              </DropdownMenuItem>
               {canDelete ? (
                 <>
                   <DropdownMenuSeparator />
-                  <ConfirmAction
-                    title={`Delete "${booking.title}"?`}
-                    description="This only removes the record here. It does not cancel anything with the provider."
-                    onConfirm={() =>
-                      run(() => deleteBookingAction(tripId, booking.id), {
-                        success: "Booking deleted",
-                      })
-                    }
-                    trigger={
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onSelect={(event) => event.preventDefault()}
-                      >
-                        <Trash2 aria-hidden />
-                        Delete
-                      </DropdownMenuItem>
-                    }
-                  />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={() => setDialog("delete")}
+                  >
+                    <Trash2 aria-hidden />
+                    Delete
+                  </DropdownMenuItem>
                 </>
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
+          <BookingFormDialog
+            tripId={tripId}
+            initial={toFormInput(booking)}
+            editing={{ id: booking.id, version: booking.version }}
+            members={members}
+            options={options}
+            open={dialog === "edit"}
+            onOpenChange={(open) => setDialog(open ? "edit" : null)}
+          />
+          {canDelete ? (
+            <ConfirmAction
+              open={dialog === "delete"}
+              onOpenChange={(open) => setDialog(open ? "delete" : null)}
+              title={`Delete "${booking.title}"?`}
+              description="This only removes the record here. It does not cancel anything with the provider."
+              onConfirm={() =>
+                run(() => deleteBookingAction(tripId, booking.id), {
+                  success: "Booking deleted",
+                })
+              }
+            />
+          ) : null}
         </div>
       </div>
 

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
+import { useState } from "react";
 
 import { ConfirmAction } from "@/components/shared/confirm-button";
 import { EventStatusBadge } from "@/components/shared/status-badge";
@@ -341,6 +342,7 @@ function EventRow({
   tripStart: string | null;
   tripEnd: string | null;
 }) {
+  const [dialog, setDialog] = useState<"edit" | "delete" | null>(null);
   const { run, pending } = useAction();
   const Icon = KIND_ICONS[event.kind];
   const time = formatTimeRange(event.startMinute, event.endMinute);
@@ -410,42 +412,42 @@ function EventRow({
               Mark confirmed
             </DropdownMenuItem>
           ) : null}
-          <EventFormDialog
-            tripId={tripId}
-            initial={toFormInput(event)}
-            editing={{ id: event.id, version: event.version }}
-            links={links}
-            tripStart={tripStart}
-            tripEnd={tripEnd}
-            trigger={
-              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
-                <Pencil aria-hidden />
-                Edit
-              </DropdownMenuItem>
-            }
-          />
+          <DropdownMenuItem onSelect={() => setDialog("edit")}>
+            <Pencil aria-hidden />
+            Edit
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <ConfirmAction
-            title={`Remove "${event.title}"?`}
-            description="It will be removed from the itinerary for everyone."
-            confirmLabel="Remove"
-            onConfirm={() =>
-              run(() => deleteEventAction(tripId, event.id), {
-                success: "Removed from itinerary",
-              })
-            }
-            trigger={
-              <DropdownMenuItem
-                variant="destructive"
-                onSelect={(e) => e.preventDefault()}
-              >
-                <Trash2 aria-hidden />
-                Remove
-              </DropdownMenuItem>
-            }
-          />
+          <DropdownMenuItem
+            variant="destructive"
+            onSelect={() => setDialog("delete")}
+          >
+            <Trash2 aria-hidden />
+            Remove
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <EventFormDialog
+        tripId={tripId}
+        initial={toFormInput(event)}
+        editing={{ id: event.id, version: event.version }}
+        links={links}
+        tripStart={tripStart}
+        tripEnd={tripEnd}
+        open={dialog === "edit"}
+        onOpenChange={(open) => setDialog(open ? "edit" : null)}
+      />
+      <ConfirmAction
+        open={dialog === "delete"}
+        onOpenChange={(open) => setDialog(open ? "delete" : null)}
+        title={`Remove "${event.title}"?`}
+        description="It will be removed from the itinerary for everyone."
+        confirmLabel="Remove"
+        onConfirm={() =>
+          run(() => deleteEventAction(tripId, event.id), {
+            success: "Removed from itinerary",
+          })
+        }
+      />
     </li>
   );
 }

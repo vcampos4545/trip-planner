@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 
 import {
   FieldShell,
@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { EventKind } from "@/generated/prisma/enums";
+import { useControllableOpen } from "@/hooks/use-controllable-open";
 import { useZodForm } from "@/hooks/use-zod-form";
 import { EVENT_KIND_LABELS } from "@/lib/labels";
 import {
@@ -35,6 +36,8 @@ import {
 export function EventFormDialog({
   tripId,
   trigger,
+  open: openProp,
+  onOpenChange,
   initial,
   editing,
   isSuggestion = false,
@@ -43,7 +46,9 @@ export function EventFormDialog({
   tripEnd,
 }: {
   tripId: string;
-  trigger: React.ReactNode;
+  trigger?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   initial: EventFormInput;
   editing?: { id: string; version: number };
   isSuggestion?: boolean;
@@ -54,10 +59,10 @@ export function EventFormDialog({
   tripStart: string | null;
   tripEnd: string | null;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useControllableOpen(openProp, onOpenChange);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>

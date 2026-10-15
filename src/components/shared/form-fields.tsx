@@ -27,7 +27,9 @@ export function FieldShell({
       <Label htmlFor={htmlFor} className="text-[13px]">
         {label}
         {optional ? (
-          <span className="font-normal text-muted-foreground">(optional)</span>
+          <span className="font-normal text-muted-foreground">
+            <span className="sr-only"> </span>(optional)
+          </span>
         ) : null}
       </Label>
       {children}

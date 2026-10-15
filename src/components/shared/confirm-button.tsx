@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,27 +11,34 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { useControllableOpen } from "@/hooks/use-controllable-open";
 
 /** Wraps a trigger with a confirmation dialog. Used for every destructive action. */
 export function ConfirmAction({
   trigger,
+  open: openProp,
+  onOpenChange,
   title,
   description,
   confirmLabel = "Delete",
   destructive = true,
   onConfirm,
 }: {
-  trigger: React.ReactNode;
+  trigger?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   title: string;
   description: React.ReactNode;
   confirmLabel?: string;
   destructive?: boolean;
   onConfirm: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useControllableOpen(openProp, onOpenChange);
   return (
     <AlertDialog open={open} onOpenChange={setOpen}>
-      <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
+      {trigger ? (
+        <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
+      ) : null}
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>

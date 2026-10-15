@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 
 import {
   FieldShell,
@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { OptionCategory } from "@/generated/prisma/enums";
+import { useControllableOpen } from "@/hooks/use-controllable-open";
 import { useZodForm } from "@/hooks/use-zod-form";
 import { OPTION_CATEGORY_LABELS } from "@/lib/labels";
 import {
@@ -51,20 +52,24 @@ export const EMPTY_OPTION: OptionFormInput = {
 export function OptionFormDialog({
   tripId,
   trigger,
+  open: openProp,
+  onOpenChange,
   initial = EMPTY_OPTION,
   editing,
   defaultCurrency,
 }: {
   tripId: string;
-  trigger: React.ReactNode;
+  trigger?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   initial?: OptionFormInput;
   editing?: { id: string; version: number };
   defaultCurrency: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useControllableOpen(openProp, onOpenChange);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null}
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{editing ? "Edit option" : "Add an option"}</DialogTitle>

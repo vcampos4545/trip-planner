@@ -203,6 +203,7 @@ function OptionCard({
 }) {
   const { run, pending } = useAction();
   const [showNotes, setShowNotes] = useState(false);
+  const [dialog, setDialog] = useState<"edit" | "delete" | null>(null);
   const Icon = CATEGORY_ICONS[option.category];
   const price = formatMoneyValue(option.priceAmount, option.priceCurrency);
   const transitions = allowedOptionTransitions(option.status, role);
@@ -401,56 +402,56 @@ function OptionCard({
                 </DropdownMenuItem>
               ) : null}
               <DropdownMenuSeparator />
-              <OptionFormDialog
-                tripId={tripId}
-                defaultCurrency={defaultCurrency}
-                editing={{ id: option.id, version: option.version }}
-                initial={{
-                  category: option.category,
-                  title: option.title,
-                  description: option.description ?? "",
-                  url: option.url ?? "",
-                  sourceName: option.sourceName ?? "",
-                  priceAmount: option.priceAmount ?? "",
-                  priceCurrency: option.priceCurrency ?? "",
-                  priceUnit: option.priceUnit ?? "",
-                  priceNote: option.priceNote ?? "",
-                  locationName: option.locationName ?? "",
-                  address: option.address ?? "",
-                  latitude: option.latitude?.toString() ?? "",
-                  longitude: option.longitude?.toString() ?? "",
-                }}
-                trigger={
-                  <DropdownMenuItem
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    <Pencil aria-hidden />
-                    Edit
-                  </DropdownMenuItem>
-                }
-              />
+              <DropdownMenuItem onSelect={() => setDialog("edit")}>
+                <Pencil aria-hidden />
+                Edit
+              </DropdownMenuItem>
               {canDelete ? (
-                <ConfirmAction
-                  title={`Delete "${option.title}"?`}
-                  description="It will be removed for everyone. Votes that used it keep their label."
-                  onConfirm={() =>
-                    run(() => deleteOptionAction(tripId, option.id), {
-                      success: "Option deleted",
-                    })
-                  }
-                  trigger={
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onSelect={(event) => event.preventDefault()}
-                    >
-                      <Trash2 aria-hidden />
-                      Delete
-                    </DropdownMenuItem>
-                  }
-                />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => setDialog("delete")}
+                >
+                  <Trash2 aria-hidden />
+                  Delete
+                </DropdownMenuItem>
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
+          <OptionFormDialog
+            tripId={tripId}
+            defaultCurrency={defaultCurrency}
+            editing={{ id: option.id, version: option.version }}
+            initial={{
+              category: option.category,
+              title: option.title,
+              description: option.description ?? "",
+              url: option.url ?? "",
+              sourceName: option.sourceName ?? "",
+              priceAmount: option.priceAmount ?? "",
+              priceCurrency: option.priceCurrency ?? "",
+              priceUnit: option.priceUnit ?? "",
+              priceNote: option.priceNote ?? "",
+              locationName: option.locationName ?? "",
+              address: option.address ?? "",
+              latitude: option.latitude?.toString() ?? "",
+              longitude: option.longitude?.toString() ?? "",
+            }}
+            open={dialog === "edit"}
+            onOpenChange={(open) => setDialog(open ? "edit" : null)}
+          />
+          {canDelete ? (
+            <ConfirmAction
+              open={dialog === "delete"}
+              onOpenChange={(open) => setDialog(open ? "delete" : null)}
+              title={`Delete "${option.title}"?`}
+              description="It will be removed for everyone. Votes that used it keep their label."
+              onConfirm={() =>
+                run(() => deleteOptionAction(tripId, option.id), {
+                  success: "Option deleted",
+                })
+              }
+            />
+          ) : null}
         </div>
       </div>
 
