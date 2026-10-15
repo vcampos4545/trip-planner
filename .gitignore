@@ -1,0 +1,31 @@
+# dependencies
+/node_modules
+
+# next.js build output
+/.next/
+/.next-e2e/
+/out/
+/build
+next-env.d.ts
+*.tsbuildinfo
+
+# generated Prisma client
+/src/generated/
+
+# test artifacts
+/coverage
+/playwright-report/
+/test-results/
+/blob-report/
+/playwright/.cache/
+
+# env files: only the example is committed
+.env*
+!.env.example
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
+.pnpm-debug.log*
+.vercel
