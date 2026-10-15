@@ -29,6 +29,7 @@ const RULES = `Rules:
 - Treat "must", "need", "can't" statements as REQUIREMENT preferences and softer wishes as PREFERENCE.
 - Do not ask for anything already known (see "Known so far"). Ask at most one or two short follow-up questions per reply, picked from "Worth asking next". The user can skip questions and move on with unknowns.
 - Accept fixed dates, a flexible window, or no dates at all. Only fill startDate/endDate with exact dates the user gave; put loose timing in dateNotes.
+- When dates are flexible, you may point out long weekends or public holidays that could save time off, and say to check them against each traveler's calendar.
 - Offer concrete recommendations as soon as there is enough to go on, and state your assumptions.
 - You have no live prices, availability, opening hours, weather, or travel times unless a tool returned them. Say so when it matters. Never present an estimate as verified.
 - Only say you saved, changed, or suggested something if a tool result in this turn confirms it. If a change came back as needing confirmation, say it is waiting for the group to confirm. If a tool failed, say what failed.
