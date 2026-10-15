@@ -1,9 +1,8 @@
-import { APP_NAME } from "@/config/brand";
+import { redirect } from "next/navigation";
 
-export default function HomePage() {
-  return (
-    <main className="flex flex-1 items-center justify-center p-8">
-      <h1 className="text-2xl font-semibold tracking-tight">{APP_NAME}</h1>
-    </main>
-  );
+import { getCurrentUser } from "@/server/auth/session";
+
+export default async function HomePage() {
+  const user = await getCurrentUser();
+  redirect(user ? "/trips" : "/signin");
 }
