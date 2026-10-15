@@ -1,0 +1,767 @@
+// Data model for the group trip planner.
+//
+// Conventions:
+// - Every trip-scoped table carries `tripId` so authorization can always scope queries by trip.
+// - Records that several members edit carry a `version` column for optimistic concurrency.
+// - Calendar dates for itinerary and bookings are stored as local dates (`@db.Date`) with
+//   minutes after midnight, because itineraries are planned in destination local time.
+// - JSON is only used for AI draft state, proposed patches, and provider payloads.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Auth.js tables (Prisma adapter)
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts           Account[]
+  sessions           Session[]
+  memberships        TripMember[]
+  conversations      Conversation[]
+  messages           Message[]
+  tripsCreated       Trip[]               @relation("TripCreatedBy")
+  tripsUpdated       Trip[]               @relation("TripUpdatedBy")
+  invitationsCreated TripInvitation[]     @relation("InvitationCreatedBy")
+  invitationsRevoked TripInvitation[]     @relation("InvitationRevokedBy")
+  preferencesCreated TripPreference[]
+  optionsCreated     ResearchOption[]     @relation("OptionCreatedBy")
+  optionsUpdated     ResearchOption[]     @relation("OptionUpdatedBy")
+  optionNotes        OptionNote[]
+  tasksCreated       Task[]               @relation("TaskCreatedBy")
+  tasksUpdated       Task[]               @relation("TaskUpdatedBy")
+  decisionsCreated   Decision[]           @relation("DecisionCreatedBy")
+  decisionsResolved  Decision[]           @relation("DecisionResolvedBy")
+  votes              Vote[]
+  eventsCreated      ItineraryEvent[]     @relation("EventCreatedBy")
+  eventsUpdated      ItineraryEvent[]     @relation("EventUpdatedBy")
+  bookingsCreated    Booking[]            @relation("BookingCreatedBy")
+  bookingsUpdated    Booking[]            @relation("BookingUpdatedBy")
+  proposalsCreated   TripDetailProposal[] @relation("ProposalCreatedBy")
+  proposalsResolved  TripDetailProposal[] @relation("ProposalResolvedBy")
+  activity           ActivityLog[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  // OAuth tokens are not needed after sign-in; the adapter wrapper drops them before saving.
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Trips and membership
+// ---------------------------------------------------------------------------
+
+enum MemberRole {
+  ORGANIZER
+  MEMBER
+}
+
+enum TripStage {
+  DREAMING
+  PLANNING
+  BOOKING
+  READY
+  COMPLETED
+}
+
+enum TripStartMode {
+  KNOWN_DESTINATION
+  VIBE
+  DISCOVER
+  MANUAL
+}
+
+enum DateFlexibility {
+  UNKNOWN
+  FIXED
+  FLEXIBLE
+}
+
+enum BudgetBasis {
+  UNKNOWN
+  PER_PERSON
+  TOTAL
+}
+
+enum BudgetComponent {
+  FLIGHTS
+  LODGING
+  ACTIVITIES
+  FOOD
+  LOCAL_TRANSPORT
+}
+
+enum ArrangementStatus {
+  UNKNOWN
+  NOT_NEEDED
+  NEEDED
+  IN_PROGRESS
+  BOOKED
+}
+
+model Trip {
+  id                   String            @id @default(cuid())
+  title                String
+  summary              String?
+  stage                TripStage         @default(DREAMING)
+  startMode            TripStartMode
+  destination          String?
+  destinationConfirmed Boolean           @default(false)
+  departureLocation    String?
+  tripStyle            String?
+  startDate            DateTime?         @db.Date
+  endDate              DateTime?         @db.Date
+  dateFlexibility      DateFlexibility   @default(UNKNOWN)
+  dateNotes            String?
+  durationDays         Int?
+  groupSize            Int?
+  groupNotes           String?
+  budgetAmount         Decimal?          @db.Decimal(12, 2)
+  budgetCurrency       String?           @db.Char(3)
+  budgetBasis          BudgetBasis       @default(UNKNOWN)
+  budgetIncludes       BudgetComponent[]
+  budgetNotes          String?
+  flightsStatus        ArrangementStatus @default(UNKNOWN)
+  lodgingStatus        ArrangementStatus @default(UNKNOWN)
+  localTransportStatus ArrangementStatus @default(UNKNOWN)
+  activitiesStatus     ArrangementStatus @default(UNKNOWN)
+  currency             String            @default("USD") @db.Char(3)
+  isSample             Boolean           @default(false)
+  version              Int               @default(1)
+  createdById          String
+  updatedById          String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  createdBy     User                 @relation("TripCreatedBy", fields: [createdById], references: [id])
+  updatedBy     User?                @relation("TripUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  members       TripMember[]
+  invitations   TripInvitation[]
+  preferences   TripPreference[]
+  conversations Conversation[]
+  proposals     TripDetailProposal[]
+  options       ResearchOption[]
+  tasks         Task[]
+  decisions     Decision[]
+  events        ItineraryEvent[]
+  bookings      Booking[]
+  activity      ActivityLog[]
+
+  @@index([createdById])
+}
+
+model TripMember {
+  id          String     @id @default(cuid())
+  tripId      String
+  userId      String
+  role        MemberRole @default(MEMBER)
+  invitedById String?
+  joinedAt    DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  trip          Trip                 @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  preferences   TripPreference[]
+  assignedTasks Task[]
+  bookings      BookingParticipant[]
+
+  @@unique([tripId, userId])
+  @@index([userId])
+}
+
+model TripInvitation {
+  id          String     @id @default(cuid())
+  tripId      String
+  // Only a SHA-256 hash of the invitation token is stored.
+  tokenHash   String     @unique
+  role        MemberRole @default(MEMBER)
+  createdById String
+  expiresAt   DateTime
+  maxUses     Int?
+  useCount    Int        @default(0)
+  revokedAt   DateTime?
+  revokedById String?
+  createdAt   DateTime   @default(now())
+
+  trip      Trip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdBy User  @relation("InvitationCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  revokedBy User? @relation("InvitationRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+
+  @@index([tripId, createdAt])
+}
+
+enum PreferenceKind {
+  INTEREST
+  TRAVEL_STYLE
+  ACCESSIBILITY
+  DIETARY
+  LANGUAGE
+  LODGING
+  TRANSPORT
+  ACTIVITY
+  BUDGET
+  OTHER
+}
+
+enum PreferenceStrength {
+  REQUIREMENT
+  PREFERENCE
+}
+
+enum RecordOrigin {
+  USER
+  ATLAS
+  RESEARCH_PROVIDER
+  SAMPLE_DATA
+}
+
+/// A structured preference or constraint. Hard requirements are distinct from soft preferences.
+model TripPreference {
+  id          String             @id @default(cuid())
+  tripId      String
+  memberId    String?
+  kind        PreferenceKind
+  strength    PreferenceStrength @default(PREFERENCE)
+  description String
+  origin      RecordOrigin       @default(USER)
+  createdById String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  trip      Trip        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  member    TripMember? @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  createdBy User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([tripId])
+}
+
+// ---------------------------------------------------------------------------
+// Conversations with Atlas
+// ---------------------------------------------------------------------------
+
+/// One conversation per user per trip. Before a trip exists, `tripId` is null and `draft`
+/// holds the validated details collected so far.
+model Conversation {
+  id            String         @id @default(cuid())
+  userId        String
+  tripId        String?
+  startMode     TripStartMode?
+  draft         Json?
+  lastMessageAt DateTime       @default(now())
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trip      Trip?                @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  messages  Message[]
+  proposals TripDetailProposal[]
+
+  @@unique([tripId, userId])
+  @@index([userId, lastMessageAt])
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  NOTICE
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String      @db.Text
+  authorId       String?
+  // Model identifier for assistant replies, so live output is attributable.
+  model          String?
+  // Summary of tool calls that ran for this reply (names, outcomes, created record ids).
+  metadata       Json?
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?        @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+}
+
+enum ProposalStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+/// A change Atlas wants to make to trip details that already have a value. A member must accept it.
+model TripDetailProposal {
+  id             String         @id @default(cuid())
+  tripId         String
+  conversationId String?
+  proposedById   String
+  summary        String
+  changes        Json
+  status         ProposalStatus @default(PENDING)
+  resolvedById   String?
+  resolvedAt     DateTime?
+  createdAt      DateTime       @default(now())
+
+  trip         Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  proposedBy   User          @relation("ProposalCreatedBy", fields: [proposedById], references: [id], onDelete: Cascade)
+  resolvedBy   User?         @relation("ProposalResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([tripId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Research and decisions
+// ---------------------------------------------------------------------------
+
+enum OptionCategory {
+  DESTINATION
+  LODGING
+  FLIGHT
+  TRANSPORT
+  ACTIVITY
+  FOOD
+  OTHER
+}
+
+enum OptionStatus {
+  SUGGESTED
+  SHORTLISTED
+  APPROVED
+  BOOKED
+  REJECTED
+  CANCELLED
+}
+
+model ResearchOption {
+  id              String         @id @default(cuid())
+  tripId          String
+  category        OptionCategory
+  title           String
+  description     String?
+  url             String?
+  sourceName      String?
+  origin          RecordOrigin   @default(USER)
+  status          OptionStatus   @default(SUGGESTED)
+  priceAmount     Decimal?       @db.Decimal(12, 2)
+  priceCurrency   String?        @db.Char(3)
+  priceUnit       String?
+  priceNote       String?
+  locationName    String?
+  address         String?
+  latitude        Float?
+  longitude       Float?
+  rationale       String?
+  // When the source information was retrieved. Null for manual entries without a lookup.
+  retrievedAt     DateTime?
+  providerPayload Json?
+  version         Int            @default(1)
+  createdById     String?
+  updatedById     String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  trip            Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdBy       User?            @relation("OptionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy       User?            @relation("OptionUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  notes           OptionNote[]
+  decisionChoices DecisionChoice[]
+  tasks           Task[]
+  events          ItineraryEvent[]
+  bookings        Booking[]
+
+  @@index([tripId, category])
+  @@index([tripId, status])
+}
+
+model OptionNote {
+  id        String   @id @default(cuid())
+  optionId  String
+  authorId  String?
+  body      String
+  createdAt DateTime @default(now())
+
+  option ResearchOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  author User?          @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([optionId, createdAt])
+}
+
+enum DecisionStatus {
+  OPEN
+  RESOLVED
+  CANCELLED
+}
+
+model Decision {
+  id             String         @id @default(cuid())
+  tripId         String
+  title          String
+  description    String?
+  status         DecisionStatus @default(OPEN)
+  chosenChoiceId String?        @unique
+  resolutionNote String?
+  createdById    String?
+  resolvedById   String?
+  resolvedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  trip         Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  choices      DecisionChoice[] @relation("DecisionChoices")
+  chosenChoice DecisionChoice?  @relation("DecisionChosenChoice", fields: [chosenChoiceId], references: [id], onDelete: SetNull)
+  votes        Vote[]
+  createdBy    User?            @relation("DecisionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  resolvedBy   User?            @relation("DecisionResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([tripId, status])
+}
+
+model DecisionChoice {
+  id               String   @id @default(cuid())
+  decisionId       String
+  label            String
+  researchOptionId String?
+  position         Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  decision  Decision        @relation("DecisionChoices", fields: [decisionId], references: [id], onDelete: Cascade)
+  chosenFor Decision?       @relation("DecisionChosenChoice")
+  option    ResearchOption? @relation(fields: [researchOptionId], references: [id], onDelete: SetNull)
+  votes     Vote[]
+
+  @@index([decisionId])
+}
+
+/// One vote per member per decision. Changing a vote updates the row.
+model Vote {
+  id         String   @id @default(cuid())
+  decisionId String
+  choiceId   String
+  userId     String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  decision Decision       @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  choice   DecisionChoice @relation(fields: [choiceId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([decisionId, userId])
+  @@index([choiceId])
+}
+
+// ---------------------------------------------------------------------------
+// Tasks
+// ---------------------------------------------------------------------------
+
+enum TaskStatus {
+  SUGGESTED
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Task {
+  id               String       @id @default(cuid())
+  tripId           String
+  title            String
+  description      String?
+  status           TaskStatus   @default(OPEN)
+  priority         TaskPriority @default(MEDIUM)
+  dueDate          DateTime?    @db.Date
+  assigneeMemberId String?
+  relatedOptionId  String?
+  relatedBookingId String?
+  relatedEventId   String?
+  origin           RecordOrigin @default(USER)
+  completedAt      DateTime?
+  version          Int          @default(1)
+  createdById      String?
+  updatedById      String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  trip           Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  assignee       TripMember?     @relation(fields: [assigneeMemberId], references: [id], onDelete: SetNull)
+  relatedOption  ResearchOption? @relation(fields: [relatedOptionId], references: [id], onDelete: SetNull)
+  relatedBooking Booking?        @relation(fields: [relatedBookingId], references: [id], onDelete: SetNull)
+  relatedEvent   ItineraryEvent? @relation(fields: [relatedEventId], references: [id], onDelete: SetNull)
+  createdBy      User?           @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy      User?           @relation("TaskUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([tripId, status])
+  @@index([assigneeMemberId])
+}
+
+// ---------------------------------------------------------------------------
+// Itinerary
+// ---------------------------------------------------------------------------
+
+enum EventStatus {
+  SUGGESTED
+  PLANNED
+  CONFIRMED
+  CANCELLED
+}
+
+enum EventKind {
+  ACTIVITY
+  MEAL
+  TRANSFER
+  FLIGHT
+  LODGING
+  FREE_TIME
+  OTHER
+}
+
+model ItineraryEvent {
+  id               String       @id @default(cuid())
+  tripId           String
+  title            String
+  kind             EventKind    @default(ACTIVITY)
+  status           EventStatus  @default(PLANNED)
+  date             DateTime     @db.Date
+  // Minutes after local midnight. Null means "time not set".
+  startMinute      Int?
+  endMinute        Int?
+  locationName     String?
+  address          String?
+  latitude         Float?
+  longitude        Float?
+  url              String?
+  notes            String?
+  // Why Atlas suggested it and what it could not verify (hours, travel time, prices).
+  rationale        String?
+  caveats          String?
+  researchOptionId String?
+  bookingId        String?
+  origin           RecordOrigin @default(USER)
+  version          Int          @default(1)
+  createdById      String?
+  updatedById      String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  trip           Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  researchOption ResearchOption? @relation(fields: [researchOptionId], references: [id], onDelete: SetNull)
+  booking        Booking?        @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  tasks          Task[]
+  createdBy      User?           @relation("EventCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy      User?           @relation("EventUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([tripId, date])
+}
+
+// ---------------------------------------------------------------------------
+// Bookings and budget
+// ---------------------------------------------------------------------------
+
+enum BookingCategory {
+  FLIGHT
+  ACCOMMODATION
+  GROUND_TRANSPORT
+  ACTIVITY
+  OTHER
+}
+
+enum BookingStatus {
+  PLANNED
+  BOOKED
+  CONFIRMED
+  CANCELLED
+}
+
+/// How a booking's cost is attributed to its participants.
+enum CostSplit {
+  // costAmount is a shared total, divided equally among participants.
+  SHARED_EQUALLY
+  // costAmount is the price for each participant (for example a per-seat fare).
+  PER_PERSON
+  // Each participant has an explicit share amount.
+  CUSTOM
+}
+
+enum ParticipantStatus {
+  CONSIDERING
+  BOOKED
+}
+
+model Booking {
+  id               String          @id @default(cuid())
+  tripId           String
+  category         BookingCategory
+  title            String
+  provider         String?
+  url              String?
+  reference        String?
+  status           BookingStatus   @default(PLANNED)
+  startDate        DateTime?       @db.Date
+  startMinute      Int?
+  endDate          DateTime?       @db.Date
+  endMinute        Int?
+  fromLocation     String?
+  toLocation       String?
+  locationName     String?
+  address          String?
+  // Null cost means "unpriced", never zero.
+  costAmount       Decimal?        @db.Decimal(12, 2)
+  currency         String?         @db.Char(3)
+  costIsEstimate   Boolean         @default(true)
+  costSplit        CostSplit       @default(SHARED_EQUALLY)
+  notes            String?
+  researchOptionId String?
+  version          Int             @default(1)
+  createdById      String?
+  updatedById      String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  trip           Trip                 @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  researchOption ResearchOption?      @relation(fields: [researchOptionId], references: [id], onDelete: SetNull)
+  participants   BookingParticipant[]
+  events         ItineraryEvent[]
+  tasks          Task[]
+  createdBy      User?                @relation("BookingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy      User?                @relation("BookingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([tripId, category])
+}
+
+model BookingParticipant {
+  id             String            @id @default(cuid())
+  bookingId      String
+  memberId       String
+  status         ParticipantStatus @default(BOOKED)
+  shareAmount    Decimal?          @db.Decimal(12, 2)
+  roomAssignment String?
+  createdAt      DateTime          @default(now())
+
+  booking Booking    @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  member  TripMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([bookingId, memberId])
+  @@index([memberId])
+}
+
+// ---------------------------------------------------------------------------
+// Activity history
+// ---------------------------------------------------------------------------
+
+enum ActivityType {
+  TRIP_CREATED
+  TRIP_UPDATED
+  MEMBER_JOINED
+  MEMBER_LEFT
+  MEMBER_REMOVED
+  MEMBER_ROLE_CHANGED
+  INVITE_CREATED
+  INVITE_REVOKED
+  PREFERENCE_ADDED
+  PREFERENCE_REMOVED
+  PROPOSAL_CREATED
+  PROPOSAL_ACCEPTED
+  PROPOSAL_REJECTED
+  OPTION_ADDED
+  OPTION_UPDATED
+  OPTION_STATUS_CHANGED
+  OPTION_NOTE_ADDED
+  OPTION_REMOVED
+  DECISION_CREATED
+  VOTE_CAST
+  DECISION_RESOLVED
+  DECISION_CANCELLED
+  TASK_CREATED
+  TASK_SUGGESTED
+  TASK_UPDATED
+  TASK_COMPLETED
+  TASK_REMOVED
+  EVENT_ADDED
+  EVENT_SUGGESTED
+  EVENT_UPDATED
+  EVENT_REMOVED
+  BOOKING_ADDED
+  BOOKING_UPDATED
+  BOOKING_CONFIRMED
+  BOOKING_REMOVED
+  SUGGESTION_ACCEPTED
+  SUGGESTION_DISMISSED
+}
+
+model ActivityLog {
+  id         String       @id @default(cuid())
+  tripId     String
+  actorId    String?
+  type       ActivityType
+  summary    String
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime     @default(now())
+
+  trip  Trip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([tripId, createdAt(sort: Desc)])
+}
