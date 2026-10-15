@@ -24,8 +24,10 @@
     "db:studio": "prisma studio",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "postinstall": "prisma generate"
+    "test:e2e": "pnpm e2e:build && playwright test",
+    "postinstall": "prisma generate",
+    "e2e:build": "NEXT_DIST_DIR=.next-e2e next build",
+    "test:unit": "vitest run --project unit"
   },
   "dependencies": {
     "@auth/prisma-adapter": "2.11.3",
