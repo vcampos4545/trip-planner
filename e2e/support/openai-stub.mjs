@@ -3,7 +3,8 @@
  *
  * The app under test uses its real OpenAI provider; the suite points OPENAI_BASE_URL here so tool
  * calling, validation, persistence, and error handling run end to end without a real key. Replies
- * are chosen from the latest user message, so tests are deterministic.
+ * are chosen from the latest user message, so tests are deterministic. Requests that carry the
+ * hosted `web_search` tool get canned search results with sources and citations.
  */
 import { createServer } from "node:http";
 
@@ -97,6 +98,7 @@ function response(model, output) {
 }
 
 function lastUserText(input) {
+  if (typeof input === "string") return input;
   const users = (input ?? []).filter((item) => item.role === "user");
   const last = users[users.length - 1];
   if (!last) return "";
@@ -105,10 +107,105 @@ function lastUserText(input) {
     : JSON.stringify(last.content);
 }
 
+/**
+ * Canned results for the hosted web_search tool. The third result is not among the consulted
+ * sources or citations, so the app must drop it rather than present it as live.
+ */
+const WEB_RESULTS = [
+  {
+    title: "Stub Hotel Pantheon",
+    url: "https://stays.stub.example/pantheon?utm_source=openai",
+    sourceName: "Stub Stays",
+    description: "Small hotel a short walk from the Pantheon.",
+    locationName: "Rome",
+    price: { amount: "210", currency: "EUR", unit: "night" },
+    availability: "Rooms available on the requested dates",
+  },
+  {
+    title: "Stub Trastevere Apartment",
+    url: "https://rentals.stub.example/trastevere",
+    sourceName: "Stub Rentals",
+    description: "Two-bedroom apartment in Trastevere.",
+    locationName: "Rome",
+    price: null,
+    availability: null,
+  },
+  {
+    title: "Invented Palace Hotel",
+    url: "https://invented.stub.example/palace",
+    sourceName: "Nowhere",
+    description: "Not a page the search consulted.",
+    locationName: "Rome",
+    price: { amount: "99", currency: "EUR", unit: "night" },
+    availability: "Always available",
+  },
+];
+
+/** Answers a research request that uses the hosted web_search tool. */
+function webSearch(body) {
+  const query = typeof body.input === "string" ? body.input : "";
+  const text = JSON.stringify({ results: WEB_RESULTS });
+  return response(body.model, [
+    {
+      type: "web_search_call",
+      id: nextId("ws"),
+      status: "completed",
+      action: {
+        type: "search",
+        query,
+        sources: [{ type: "url", url: "https://stays.stub.example/pantheon" }],
+      },
+    },
+    {
+      type: "message",
+      id: nextId("msg"),
+      role: "assistant",
+      status: "completed",
+      content: [
+        {
+          type: "output_text",
+          text,
+          annotations: [
+            {
+              type: "url_citation",
+              start_index: 0,
+              end_index: text.length,
+              url: "https://rentals.stub.example/trastevere?utm_source=openai",
+              title: "Trastevere apartment",
+            },
+          ],
+        },
+      ],
+    },
+  ]);
+}
+
+function isWebSearchRequestValid(body) {
+  return (
+    body.store === false &&
+    body.tool_choice === "required" &&
+    Array.isArray(body.include) &&
+    body.include.includes("web_search_call.action.sources") &&
+    body.text?.format?.type === "json_schema" &&
+    body.text.format.strict === true
+  );
+}
+
 /** Picks tool calls for a fresh user message. */
 function plan(text, instructions) {
   const lower = text.toLowerCase();
   const known = knownDetails(instructions);
+  if (lower.includes("live search")) {
+    return [
+      functionCall("search_options", {
+        category: "LODGING",
+        query: lower.includes("searchfail")
+          ? "searchfail hotels"
+          : "hotels near the Pantheon",
+        location: "Rome",
+      }),
+    ];
+  }
   if (lower.includes("lisbon")) {
     return [
       functionCall("update_trip_details", {
@@ -180,10 +277,40 @@ function plan(text, instructions) {
   return [];
 }
 
+/** After a live search, saves the first result when the user asked for that. */
+function followUp(text, outputs) {
+  const search = outputs.find((output) => output.result?.results);
+  const saved = outputs.some((output) => output.result?.saved !== undefined);
+  const first = search?.result.results[0];
+  if (!first || saved || !text.toLowerCase().includes("save the first"))
+    return [];
+  return [
+    functionCall("save_research_option", {
+      category: "LODGING",
+      title: first.title,
+      description: null,
+      rationale: "Close to the sights the group wants to see.",
+      sourceResultId: first.resultId,
+      locationName: null,
+    }),
+  ];
+}
+
 /** Writes the reply after tool results came back. */
 function reply(text, outputs) {
   const lower = text.toLowerCase();
   const failed = outputs.filter((output) => output.ok === false);
+  if (lower.includes("live search")) {
+    const search = outputs.find((output) => output.result?.results);
+    if (!search) {
+      return "Live research failed, so I can't show live results right now. Try again later or add options by hand.";
+    }
+    const links = search.result.results
+      .map((result) => `[${result.title}](${result.url})`)
+      .join(" and ");
+    const saved = outputs.some((output) => output.result?.saved === true);
+    return `Live search found ${links}.${saved ? " I saved the first one to your options for the group to review." : ""}`;
+  }
   if (lower.includes("lisbon")) {
     return "Lisbon in late May with four of you sounds great. I saved that to the trip. Where will everyone be flying from?";
   }
@@ -224,6 +351,32 @@ const server = createServer(async (request, response_) => {
     );
     return;
   }
+  if (body.tools?.some((tool) => tool.type === "web_search")) {
+    if (String(body.input).includes("searchfail")) {
+      response_.writeHead(500, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          error: { message: "Search backend error", type: "server_error" },
+        }),
+      );
+      return;
+    }
+    if (!isWebSearchRequestValid(body)) {
+      response_.writeHead(400, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          error: {
+            message:
+              "The stub expects store=false, a required web_search call, sources, and a strict JSON schema",
+            type: "invalid_request_error",
+          },
+        }),
+      );
+      return;
+    }
+    response_
+      .writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify(webSearch(body)));
+    return;
+  }
   if (
     body.store !== false ||
     !Array.isArray(body.tools) ||
@@ -250,13 +403,19 @@ const server = createServer(async (request, response_) => {
       }
     });
   const lastItem = input[input.length - 1];
+  const followUps =
+    lastItem?.type === "function_call_output" && body.tool_choice !== "none"
+      ? followUp(text, outputs)
+      : [];
   const output =
-    lastItem?.type === "function_call_output" || body.tool_choice === "none"
-      ? [message(reply(text, outputs))]
-      : (() => {
-          const calls = plan(text, body.instructions);
-          return calls.length > 0 ? calls : [message(reply(text, outputs))];
-        })();
+    followUps.length > 0
+      ? followUps
+      : lastItem?.type === "function_call_output" || body.tool_choice === "none"
+        ? [message(reply(text, outputs))]
+        : (() => {
+            const calls = plan(text, body.instructions);
+            return calls.length > 0 ? calls : [message(reply(text, outputs))];
+          })();
 
   response_
     .writeHead(200, { "content-type": "application/json" })
