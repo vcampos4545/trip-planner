@@ -39,6 +39,7 @@ export default defineConfig({
             DATABASE_URL: TEST_DATABASE_URL,
             OPENAI_API_KEY: "",
             RESEARCH_PROVIDER: "none",
+            DUFFEL_ACCESS_TOKEN: "",
           },
         },
       },
