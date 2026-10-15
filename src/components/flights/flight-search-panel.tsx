@@ -1,0 +1,457 @@
+"use client";
+
+import {
+  ArrowRight,
+  ExternalLink,
+  FlaskConical,
+  Plane,
+  PlaneTakeoff,
+  SearchX,
+} from "lucide-react";
+import { useState, useTransition } from "react";
+import { toast } from "sonner";
+
+import {
+  FieldShell,
+  NativeSelect,
+  useFieldId,
+} from "@/components/shared/form-fields";
+import { FormError } from "@/components/shared/form-error";
+import { Pill } from "@/components/shared/status-badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ASSISTANT_NAME } from "@/config/brand";
+import { useAction } from "@/hooks/use-action";
+import { useZodForm } from "@/hooks/use-zod-form";
+import { formatDateOnly, formatTimestamp } from "@/lib/dates";
+import {
+  CABIN_CLASSES,
+  CABIN_LABELS,
+  MAX_FLIGHT_PASSENGERS,
+  TEST_DATA_NOTICE,
+  bookElsewhereUrl,
+  formatDuration,
+  localClock,
+  localDate,
+  stopsLabel,
+  travelersLabel,
+  type FlightOffer,
+  type FlightSlice,
+} from "@/lib/flights";
+import { formatMoneyValue } from "@/lib/money";
+import {
+  flightSearchFormSchema,
+  type FlightSearchFormInput,
+} from "@/lib/validation/flights";
+import {
+  saveFlightAction,
+  searchFlightsAction,
+  type FlightSearchResponse,
+} from "@/server/actions/flights";
+
+export type FlightSearchPanelStatus =
+  | { configured: true; label: string; testMode: boolean }
+  | { configured: false; reason: string };
+
+export function FlightSearchPanel({
+  tripId,
+  status,
+  defaults,
+}: {
+  tripId: string;
+  status: FlightSearchPanelStatus;
+  defaults: FlightSearchFormInput;
+}) {
+  return (
+    <section
+      className="rounded-xl border bg-card p-4 sm:p-5"
+      aria-labelledby="flight-search-heading"
+      data-testid="flight-search-panel"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <PlaneTakeoff className="size-4 text-muted-foreground" aria-hidden />
+        <h2 id="flight-search-heading" className="text-sm font-semibold">
+          Search flights
+        </h2>
+        {status.configured && status.testMode ? (
+          <Pill tone="warning">
+            <FlaskConical aria-hidden />
+            Test data
+          </Pill>
+        ) : null}
+      </div>
+      {status.configured ? (
+        <>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {status.testMode
+              ? `Connected to ${status.label}. Results are samples from Duffel's test environment, not real flights, fares, or availability.`
+              : `Results from ${status.label}. Fares can change before booking.`}{" "}
+            Saving a flight adds it for the group to review. Nothing is booked.
+          </p>
+          <FlightSearch tripId={tripId} defaults={defaults} />
+        </>
+      ) : (
+        <Alert className="mt-3" data-testid="flights-not-configured">
+          <SearchX aria-hidden />
+          <AlertTitle>Flight search is not configured</AlertTitle>
+          <AlertDescription>
+            {status.reason} There are no flight results, fares, or availability.
+            You can still add flights you find yourself with Add option, and{" "}
+            {ASSISTANT_NAME} will say the same if you ask about flights.
+          </AlertDescription>
+        </Alert>
+      )}
+    </section>
+  );
+}
+
+function FlightSearch({
+  tripId,
+  defaults,
+}: {
+  tripId: string;
+  defaults: FlightSearchFormInput;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [response, setResponse] = useState<FlightSearchResponse | null>(null);
+  const { form, formError, applyResult } = useZodForm(
+    flightSearchFormSchema,
+    defaults,
+  );
+  const errors = form.formState.errors;
+  const id = {
+    origin: useFieldId("origin"),
+    destination: useFieldId("destination"),
+    departureDate: useFieldId("departureDate"),
+    returnDate: useFieldId("returnDate"),
+    passengers: useFieldId("passengers"),
+    cabin: useFieldId("cabin"),
+    maxStops: useFieldId("maxStops"),
+  };
+
+  return (
+    <div className="mt-4 space-y-4">
+      <form
+        noValidate
+        className="grid gap-3"
+        aria-label="Flight search"
+        onSubmit={form.handleSubmit(() =>
+          startTransition(async () => {
+            const result = await searchFlightsAction(tripId, form.getValues());
+            if (applyResult(result) && result.ok) setResponse(result.data);
+            else setResponse(null);
+          }),
+        )}
+      >
+        <FormError message={formError} />
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <FieldShell
+            label="From"
+            htmlFor={id.origin}
+            error={errors.origin?.message}
+            hint="City or airport code"
+          >
+            <Input
+              id={id.origin}
+              placeholder="New York or JFK"
+              aria-invalid={Boolean(errors.origin)}
+              {...form.register("origin")}
+            />
+          </FieldShell>
+          <FieldShell
+            label="To"
+            htmlFor={id.destination}
+            error={errors.destination?.message}
+            hint="City or airport code"
+          >
+            <Input
+              id={id.destination}
+              placeholder="Lisbon or LIS"
+              aria-invalid={Boolean(errors.destination)}
+              {...form.register("destination")}
+            />
+          </FieldShell>
+          <FieldShell
+            label="Depart"
+            htmlFor={id.departureDate}
+            error={errors.departureDate?.message}
+          >
+            <Input
+              id={id.departureDate}
+              type="date"
+              aria-invalid={Boolean(errors.departureDate)}
+              {...form.register("departureDate")}
+            />
+          </FieldShell>
+          <FieldShell
+            label="Return"
+            htmlFor={id.returnDate}
+            optional
+            error={errors.returnDate?.message}
+          >
+            <Input
+              id={id.returnDate}
+              type="date"
+              aria-invalid={Boolean(errors.returnDate)}
+              {...form.register("returnDate")}
+            />
+          </FieldShell>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-[8rem_12rem_10rem_auto] sm:items-end">
+          <FieldShell
+            label="Travelers"
+            htmlFor={id.passengers}
+            error={errors.passengers?.message}
+          >
+            <Input
+              id={id.passengers}
+              type="number"
+              min={1}
+              max={MAX_FLIGHT_PASSENGERS}
+              inputMode="numeric"
+              aria-invalid={Boolean(errors.passengers)}
+              {...form.register("passengers")}
+            />
+          </FieldShell>
+          <FieldShell label="Cabin" htmlFor={id.cabin}>
+            <NativeSelect id={id.cabin} {...form.register("cabin")}>
+              {CABIN_CLASSES.map((value) => (
+                <option key={value} value={value}>
+                  {CABIN_LABELS[value]}
+                </option>
+              ))}
+              <option value="any">Any cabin</option>
+            </NativeSelect>
+          </FieldShell>
+          <FieldShell label="Stops" htmlFor={id.maxStops}>
+            <NativeSelect id={id.maxStops} {...form.register("maxStops")}>
+              <option value="0">Nonstop only</option>
+              <option value="1">Up to 1 stop</option>
+              <option value="2">Up to 2 stops</option>
+            </NativeSelect>
+          </FieldShell>
+          <Button type="submit" disabled={pending} className="sm:w-fit">
+            {pending ? "Searching..." : "Search flights"}
+          </Button>
+        </div>
+      </form>
+
+      {response ? <FlightResults tripId={tripId} response={response} /> : null}
+    </div>
+  );
+}
+
+function FlightResults({
+  tripId,
+  response,
+}: {
+  tripId: string;
+  response: FlightSearchResponse;
+}) {
+  const { search } = response;
+  const compareUrl = bookElsewhereUrl({
+    origin: search.origin.iataCode,
+    destination: search.destination.iataCode,
+    departureDate: search.departureDate,
+    returnDate: search.returnDate,
+  });
+  const resolved = [search.origin, search.destination].filter(
+    (place) => place.query.toUpperCase() !== place.iataCode,
+  );
+  return (
+    <div className="space-y-3" data-testid="flight-results">
+      {response.testMode ? (
+        <Alert
+          className="border-orange-200 bg-orange-50 text-orange-900"
+          data-testid="flight-test-notice"
+        >
+          <FlaskConical aria-hidden />
+          <AlertTitle>{TEST_DATA_NOTICE}</AlertTitle>
+          <AlertDescription className="text-orange-900/80">
+            These results come from Duffel&apos;s test environment. They can use
+            real airline names, but the flights, times, and prices are samples.
+            Do not plan or pay around them.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      <p className="text-xs text-muted-foreground">
+        {response.results.length}{" "}
+        {response.results.length === 1 ? "result" : "results"} from{" "}
+        {response.sourceName}, retrieved {formatTimestamp(response.retrievedAt)}
+        . {travelersLabel(search.passengers)}, prices are totals.
+        {resolved.length > 0
+          ? ` Searched ${resolved.map((place) => `"${place.query}" as ${place.iataCode}`).join(" and ")}.`
+          : ""}
+      </p>
+      {response.results.length === 0 ? (
+        <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+          No flights matched. Try other dates, more stops, or any cabin.
+        </p>
+      ) : (
+        <ul className="grid gap-3">
+          {response.results.map((result) => (
+            <FlightResultCard
+              key={result.offer.offerId}
+              tripId={tripId}
+              offer={result.offer}
+              token={result.token}
+            />
+          ))}
+        </ul>
+      )}
+      <a
+        href={compareUrl}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+      >
+        Compare this route on Google Flights to book elsewhere
+        <ExternalLink className="size-3" aria-hidden />
+      </a>
+    </div>
+  );
+}
+
+function FlightResultCard({
+  tripId,
+  offer,
+  token,
+}: {
+  tripId: string;
+  offer: FlightOffer;
+  token: string;
+}) {
+  const { run, pending } = useAction();
+  const [saved, setSaved] = useState<"option" | "booking" | null>(null);
+  const price = formatMoneyValue(offer.totalAmount, offer.totalCurrency);
+
+  function save(asBooking: boolean) {
+    run(() => saveFlightAction(tripId, { token, asBooking }), {
+      onSuccess: (data) => {
+        setSaved(asBooking ? "booking" : (saved ?? "option"));
+        if (data.alreadySaved && !asBooking) {
+          toast.info("This flight is already in the trip's options.");
+        } else {
+          toast.success(
+            asBooking
+              ? "Saved to options and bookings. You're marked as considering it."
+              : "Saved to options for the group to review.",
+          );
+        }
+      },
+    });
+  }
+
+  return (
+    <li
+      className="rounded-lg border bg-background p-3 sm:p-4"
+      data-testid="flight-result"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Plane className="size-4 text-muted-foreground" aria-hidden />
+            <span className="font-medium">{offer.airline.name}</span>
+            {offer.testMode ? (
+              <Pill tone="warning">Test data, not a real fare</Pill>
+            ) : null}
+          </div>
+          {offer.slices.map((slice, index) => (
+            <SliceRow
+              key={index}
+              slice={slice}
+              label={
+                offer.slices.length > 1
+                  ? index === 0
+                    ? "Outbound"
+                    : "Return"
+                  : "One way"
+              }
+            />
+          ))}
+        </div>
+        <div className="text-right">
+          <p className="text-lg font-semibold" data-testid="flight-price">
+            {price}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {offer.totalCurrency} total, {travelersLabel(offer.passengers)}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {offer.sourceName}, retrieved {formatTimestamp(offer.retrievedAt)}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={pending || saved !== null}
+          onClick={() => save(false)}
+        >
+          {saved ? "Saved to options" : "Save to options"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={pending || saved === "booking"}
+          onClick={() => save(true)}
+        >
+          {saved === "booking"
+            ? "Tracking as considering"
+            : "Save and track as considering"}
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+function SliceRow({ slice, label }: { slice: FlightSlice; label: string }) {
+  const operators = [
+    ...new Set(
+      slice.segments
+        .filter(
+          (segment) => segment.operatingCarrier !== segment.marketingCarrier,
+        )
+        .map((segment) => segment.operatingCarrier),
+    ),
+  ];
+  const flightNumbers = slice.segments
+    .map((segment) => segment.flightNumber)
+    .filter(Boolean)
+    .join(", ");
+  return (
+    <div className="text-sm" data-testid="flight-slice">
+      <p className="text-xs text-muted-foreground">
+        {label} · {formatDateOnly(localDate(slice.departingAt), "weekday")}
+        {flightNumbers ? ` · ${flightNumbers}` : ""}
+      </p>
+      <p className="flex flex-wrap items-center gap-x-1.5">
+        <span className="font-medium">{localClock(slice.departingAt)}</span>
+        <span>{slice.origin.iataCode}</span>
+        <ArrowRight
+          className="size-3.5 text-muted-foreground"
+          aria-label="to"
+        />
+        <span className="font-medium">{localClock(slice.arrivingAt)}</span>
+        <span>{slice.destination.iataCode}</span>
+        {localDate(slice.arrivingAt) !== localDate(slice.departingAt) ? (
+          <span className="text-xs text-muted-foreground">
+            (arrives {formatDateOnly(localDate(slice.arrivingAt), "short")})
+          </span>
+        ) : null}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        {[
+          stopsLabel(slice.stops),
+          formatDuration(slice.durationMinutes),
+          "local times",
+          operators.length > 0 ? `operated by ${operators.join(", ")}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+      </p>
+    </div>
+  );
+}
