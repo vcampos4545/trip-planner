@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { ActionResult } from "@/lib/action-result";
 import { tripDetailsSchema, tripDraftSchema } from "@/lib/domain/trip-details";
 import { tripDetailsFormSchema } from "@/lib/validation/trip";
+import { appOrigin } from "@/server/app-url";
 import { requireActionUser } from "@/server/auth/session";
 import {
   convertConversationToTrip,
@@ -60,6 +61,7 @@ export async function sendMessageAction(
       user,
       id.parse(conversationId),
       z.string().parse(content),
+      { appUrl: await appOrigin() },
     );
     if (result.tripId) revalidateTrip(result.tripId);
     revalidatePath(`/trips/new/${conversationId}`);
