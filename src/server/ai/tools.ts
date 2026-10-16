@@ -1621,13 +1621,22 @@ const recordBookingTool = defineTool({
         );
     }
     const memberIds = await resolveTravelers(context, args.travelers);
+    // A flight picked from search results is a flight, whatever category was sent.
+    const category = args.fromShownFlight ? "FLIGHT" : args.category;
+    const trip = await db.trip.findUniqueOrThrow({
+      where: { id: context.access.tripId },
+      select: { currency: true },
+    });
     const userName = firstName(context.user.name);
     const recordedOn = new Date().toISOString().slice(0, 10);
     const provenance = `Recorded from what ${userName} told ${ASSISTANT_NAME} on ${recordedOn}. Not checked with the airline or provider.`;
 
     const stated = {
       costAmount: args.costAmount ?? "",
-      currency: (args.currency ?? "").toUpperCase(),
+      // An amount without a currency is in the trip's currency.
+      currency: (
+        args.currency ?? (args.costAmount ? trip.currency : "")
+      ).toUpperCase(),
       costIsEstimate: false,
       costSplit: args.costPerPerson
         ? ("PER_PERSON" as const)
@@ -1712,10 +1721,7 @@ const recordBookingTool = defineTool({
           : null;
       const title =
         args.title?.trim() ||
-        [
-          args.provider?.trim() || BOOKING_CATEGORY_SINGULAR[args.category],
-          route,
-        ]
+        [args.provider?.trim() || BOOKING_CATEGORY_SINGULAR[category], route]
           .filter(Boolean)
           .join(": ");
       rows.push({
@@ -1737,12 +1743,14 @@ const recordBookingTool = defineTool({
     const recorded: { id: string; title: string; created: boolean }[] = [];
     for (const row of rows) {
       const existing = await findExistingBooking(context.access, {
-        category: args.category,
+        category,
         title: row.title,
         startDate: row.startDate || null,
         offerId,
       });
       if (existing) {
+        // A record that stands for a whole round trip is updated once, not once per leg.
+        if (recorded.some((item) => item.id === existing.id)) continue;
         await recordTravelersBooked(context.access, existing.id, memberIds);
         recorded.push({
           id: existing.id,
@@ -1752,7 +1760,7 @@ const recordBookingTool = defineTool({
         continue;
       }
       const parsed = bookingFormSchema.safeParse({
-        category: args.category,
+        category,
         status: "BOOKED",
         researchOptionId: "",
         locationName: "",

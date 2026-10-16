@@ -416,6 +416,11 @@ describe("the Park City trip", () => {
             currency: "usd",
           }),
           bookingCall({ travelers: ["Jordan"], title: "Jordan's flight" }),
+          bookingCall({
+            category: "GROUND_TRANSPORT",
+            provider: "Canyon shuttle",
+            costAmount: "60",
+          }),
         ],
       },
     ]);
@@ -426,8 +431,17 @@ describe("the Park City trip", () => {
       { provider, flights: null },
     );
     const condo = await db.booking.findFirstOrThrow({
-      where: { tripId: trip.id },
+      where: { tripId: trip.id, category: "ACCOMMODATION" },
       include: { participants: true },
+    });
+    // An amount without a currency is in the trip's currency.
+    const shuttle = await db.booking.findFirstOrThrow({
+      where: { tripId: trip.id, category: "GROUND_TRANSPORT" },
+    });
+    expect(shuttle).toMatchObject({
+      title: "Canyon shuttle",
+      currency: "USD",
+      costIsEstimate: false,
     });
     expect(condo).toMatchObject({
       category: "ACCOMMODATION",
@@ -441,8 +455,9 @@ describe("the Park City trip", () => {
     expect(summaries(result.effects)).toEqual([
       'Recorded "Condo in Park City" in Bookings as booked for Vaughn, Sam',
       "Jordan isn't a member of this trip, so nothing was recorded. Ask the user to invite them first, or record it for the user.",
+      'Recorded "Canyon shuttle" in Bookings as booked for Vaughn',
     ]);
-    expect(await db.booking.count({ where: { tripId: trip.id } })).toBe(1);
+    expect(await db.booking.count({ where: { tripId: trip.id } })).toBe(2);
   });
 });
 
