@@ -62,12 +62,17 @@ import {
   type FlightOffer,
   type FlightSlice,
 } from "@/lib/flights";
+import { maskEmail, normalizeEmail } from "@/lib/domain/invitations";
 import { BOOKING_CATEGORY_SINGULAR, TRIP_THEME_LABELS } from "@/lib/labels";
+import { INVITE_TTL_CHOICES } from "@/lib/validation/invitation";
 import { bookingFormSchema } from "@/lib/validation/booking";
 import { flightSearchFormSchema } from "@/lib/validation/flights";
 import type { TripAccess } from "@/server/access";
 import type { CurrentUser } from "@/server/auth/session";
+import { inviteUrl } from "@/server/app-url";
+import { inviteDefaultTtlDays } from "@/server/config";
 import { db } from "@/server/db";
+import type { EmailProvider } from "@/server/email";
 import { DomainError } from "@/server/errors";
 import {
   ResearchFailedError,
@@ -97,6 +102,7 @@ import {
   describeChange,
   loadTripDraft,
 } from "@/server/services/trips";
+import { createInvitation, inviteByEmail } from "@/server/services/invitations";
 import { createOption, listOptions } from "@/server/services/research";
 import { suggestTask } from "@/server/services/tasks";
 import { proposeEvent } from "@/server/services/itinerary";
@@ -113,6 +119,7 @@ export type ToolEffect = {
   tool: string;
   ok: boolean;
   kind:
+    | "invited"
     | "updated"
     | "proposal"
     | "suggestion"
@@ -156,6 +163,20 @@ export type TripContext = BaseContext & {
   flightResults: Map<string, FlightOffer>;
   /** Result IDs first shown in this turn, saved with the reply so later turns can use them. */
   newFlightResultIds: string[];
+  /** What invite tools need. Absent where invites can't be made, such as some tests. */
+  invites?: InviteContext;
+};
+
+export type InviteContext = {
+  appUrl: string;
+  email: EmailProvider | null;
+  /** The user's message this turn. Atlas may only email addresses the user typed in it. */
+  userMessage: string;
+  /**
+   * Invite links made this turn. They are added under the reply by the server, so the secret
+   * token never goes to the model.
+   */
+  links: { label: string; url: string }[];
 };
 
 export type AtlasContext = DraftContext | TripContext;
@@ -1875,6 +1896,169 @@ const suggestThemeTasksTool = defineTool({
 });
 
 // ---------------------------------------------------------------------------
+// Invitations
+// ---------------------------------------------------------------------------
+
+function inviteTtl(days: number | null) {
+  return days !== null &&
+    (INVITE_TTL_CHOICES as readonly number[]).includes(days)
+    ? days
+    : inviteDefaultTtlDays();
+}
+
+function expiryLabel(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+const createInviteLinkTool = defineTool({
+  name: "create_invite_link",
+  description:
+    'Create a shareable invite link for this trip when the user asks to invite people (for example "invite my friends"). Anyone signed in with the link can join until it expires or reaches maxUses. The server adds the link under your reply; never write a URL yourself.',
+  args: z.object({
+    role: z
+      .enum(["MEMBER", "ORGANIZER"])
+      .nullable()
+      .describe("ORGANIZER only when the user asks for it. Default MEMBER."),
+    expiresInDays: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        `One of ${INVITE_TTL_CHOICES.join(", ")}. Null for the default.`,
+      ),
+    maxUses: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        "How many people can join with it (1 to 100). Null for no limit.",
+      ),
+  }),
+  phases: ["trip"],
+  async run(context, args) {
+    if (context.phase !== "trip") return {};
+    if (!context.invites)
+      throw new DomainError(
+        "UNAVAILABLE",
+        "Invite links can't be created here.",
+      );
+    const ttlDays = inviteTtl(args.expiresInDays);
+    const maxUses =
+      args.maxUses === null ? null : Math.min(Math.max(args.maxUses, 1), 100);
+    const { token, invitation } = await createInvitation(
+      context.access.tripId,
+      context.user.id,
+      { ttlDays, maxUses, role: args.role ?? "MEMBER" },
+    );
+    const details = [
+      `expires ${expiryLabel(invitation.expiresAt)}`,
+      maxUses
+        ? `up to ${maxUses} ${maxUses === 1 ? "person" : "people"}`
+        : null,
+      invitation.role === "ORGANIZER" ? "joins as organizer" : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    context.invites.links.push({
+      label: `Invite link (${details})`,
+      url: inviteUrl(context.invites.appUrl, token),
+    });
+    context.effects.push({
+      tool: this.name,
+      ok: true,
+      kind: "invited",
+      summary: `Created an invite link (${details})`,
+      entityId: invitation.id,
+    });
+    return {
+      created: true,
+      expiresAt: invitation.expiresAt.toISOString().slice(0, 10),
+      maxUses,
+      role: invitation.role,
+      note: "The link is shown under your reply automatically. Do not write a URL or a placeholder. Tell the user to copy it and share it with their group, and that they can revoke it from the Invite dialog.",
+    };
+  },
+});
+
+const inviteByEmailTool = defineTool({
+  name: "invite_by_email",
+  description:
+    "Email invitations to specific addresses. Only when the user explicitly asks you to email invitations and types the addresses in their latest message. Never guess, complete, or reuse addresses from earlier messages or trip data.",
+  args: z.object({
+    emails: z
+      .array(z.string())
+      .describe("Addresses exactly as the user typed them."),
+    role: z.enum(["MEMBER", "ORGANIZER"]).nullable(),
+  }),
+  phases: ["trip"],
+  async run(context, args) {
+    if (context.phase !== "trip") return {};
+    if (!context.invites)
+      throw new DomainError("UNAVAILABLE", "Invitations can't be sent here.");
+    const typed = context.invites.userMessage.toLowerCase();
+    const emails = [...new Set(args.emails.map(normalizeEmail))];
+    if (emails.length === 0)
+      throw new DomainError(
+        "VALIDATION",
+        "No addresses were given. Nothing was sent.",
+      );
+    const missing = emails.filter((email) => !typed.includes(email));
+    if (missing.length > 0)
+      throw new DomainError(
+        "VALIDATION",
+        "Nothing was sent. Only addresses the user typed in this message can be invited. Ask the user to type the addresses they want to invite.",
+      );
+    const { results, emailConfigured } = await inviteByEmail(
+      context.access.tripId,
+      context.user.id,
+      { emails, ttlDays: inviteDefaultTtlDays(), role: args.role ?? "MEMBER" },
+      { appUrl: context.invites.appUrl, email: context.invites.email },
+    );
+    const summary = results.map((result) => {
+      if (result.outcome === "sent")
+        return { email: result.email, outcome: "emailed" };
+      if (result.outcome === "already_member")
+        return { email: result.email, outcome: "already a member" };
+      context.invites!.links.push({
+        label: `Invite link for ${result.email} (${result.outcome === "failed" ? "the email failed" : "not emailed"})`,
+        url: result.url,
+      });
+      return {
+        email: result.email,
+        outcome:
+          result.outcome === "failed"
+            ? `not emailed: ${result.error ?? "the email failed"}`
+            : "not emailed",
+      };
+    });
+    for (const result of results) {
+      if (result.outcome === "already_member") continue;
+      context.effects.push({
+        tool: this.name,
+        ok: true,
+        kind: "invited",
+        summary:
+          result.outcome === "sent"
+            ? `Emailed an invitation to ${maskEmail(result.email)}`
+            : `Created an invitation for ${maskEmail(result.email)} (not emailed)`,
+        entityId: result.invitationId,
+      });
+    }
+    return {
+      emailConfigured,
+      results: summary,
+      note: emailConfigured
+        ? "Report exactly which addresses were emailed. For any that were not, say their links are shown under your reply to copy."
+        : "Email sending is not set up on this server, so nothing was emailed. Say so plainly, and say each person's link is shown under your reply to copy and send. Never say an email was sent.",
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Registry and execution
 // ---------------------------------------------------------------------------
 
@@ -1894,6 +2078,8 @@ const ALL_TOOLS: AtlasTool<any>[] = [
   suggestThemeTasksTool,
   proposeEventTool,
   summarizeOutstanding,
+  createInviteLinkTool,
+  inviteByEmailTool,
 ];
 
 export function toolsFor(phase: AtlasContext["phase"]): ToolSpec[] {

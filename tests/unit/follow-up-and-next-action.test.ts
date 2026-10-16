@@ -99,7 +99,21 @@ describe("nextAction", () => {
   });
 
   it("suggests inviting people when planning alone", () => {
-    expect(nextAction({ ...BASE, memberCount: 1 }).key).toBe("invite");
+    const invite = nextAction({ ...BASE, memberCount: 1 });
+    expect(invite).toMatchObject({ key: "invite", open: "invite" });
+    // Someone who can't invite isn't sent to a dialog they can't open.
+    expect(
+      nextAction({ ...BASE, memberCount: 1, canInvite: false }).key,
+    ).not.toBe("invite");
+  });
+
+  it("opens the details editor for dates and only anchors to proposals", () => {
+    expect(nextAction({ ...BASE, hasDates: false })).toMatchObject({
+      open: "details",
+    });
+    const proposals = nextAction({ ...BASE, pendingProposals: 2 });
+    expect(proposals).toMatchObject({ anchor: "proposals" });
+    expect(proposals.open).toBeUndefined();
   });
 
   it("reports on-track when nothing is outstanding", () => {

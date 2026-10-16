@@ -52,6 +52,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only from returned results. Without a token, the panel and Atlas say flight search is not
   configured.
 
+- Inviting people is complete and easy to find. An **Invite** button in the trip header, the
+  "Invite your group" next step, and the members card open one dialog to share a link (role,
+  expiry, optional use limit, copy with confirmation, and the phone share sheet) or invite people
+  by email. Active links show who created them, expiry, and uses; email invitations show pending,
+  accepted, expired, or revoked, with **Resend** and **Revoke**.
+- Email invitations bound to an address, sent through Resend (`RESEND_API_KEY`, `EMAIL_FROM`).
+  Only the Google account with that verified address can accept one. Without Resend set up, the
+  invitation is still created and its link is shown to copy, and the app says nothing was emailed.
+- The invite page shows a preview (trip name, dates, organizer, group size) before joining,
+  including to signed-out visitors, who sign in with Google and come back to the invite. Wrong
+  account, expired, revoked, used-up, and already-accepted invitations each explain what to do.
+- Organizers can transfer the organizer role, and choose whether members may invite people
+  (off by default). An organizer can step down when another organizer exists.
+- Atlas creates an invite link when an organizer asks ("invite my friends") and adds it under its
+  reply without sending the token to the model, with the new `create_invite_link` tool. The new
+  `invite_by_email` tool only emails addresses typed in the same message.
+- Activity entries for invitations sent, accepted, and revoked, invite settings, and role changes.
+  Creating invitations and sending invitation emails are rate limited per user.
+
 ### Changed
 
 - Atlas opens as a panel from an **Ask Atlas** button on every trip tab instead of having its own
@@ -70,6 +89,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The "Invite your group" next step opens the invite dialog. It used to add `#proposals` to the
+  address and do nothing. "Pick dates" opens the trip details editor, and only the proposals step
+  scrolls to the proposals.
+- The only member of a trip can no longer leave it (which used to delete the trip), and an
+  organizer can't leave until another member is an organizer. **Leave trip** is disabled with a
+  short explanation in both places it appears.
 - Flight search From and To take every form the placeholders advertise, with SerpApi and Duffel
   alike and in Atlas's `search_flights`: city names ("New York", "Lisbon"), airport codes in any
   case ("JFK", "lis"), metro codes ("NYC" searches JFK, LGA, and EWR on Google Flights), a trip's
@@ -84,8 +109,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Upgrade notes
 
-- Run `pnpm db:deploy`. The migration adds stops, airports, and themes, and turns each trip's
-  destination into its first stop.
+- Run `pnpm db:deploy`. The migrations add stops, airports, and themes (turning each trip's
+  destination into its first stop), email invitations, and the "members can invite" setting.
+- To send invitation emails, set `RESEND_API_KEY` and `EMAIL_FROM` (see the README). People who
+  signed in before this release confirm their email for email invitations by signing in again.
 - Flights you told Atlas about before this release were saved as notes, not bookings. Tell Atlas
   again (or search again and say which result you bought) to record them under Bookings > Flights.
 

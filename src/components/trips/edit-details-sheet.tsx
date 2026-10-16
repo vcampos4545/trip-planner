@@ -5,6 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { useOpenParam } from "@/hooks/use-open-param";
 import {
   Sheet,
   SheetContent,
@@ -24,14 +25,56 @@ export function EditDetailsSheet({
   triggerLabel = "Edit details",
   triggerVariant = "outline",
   description = "Changes are visible to everyone on the trip.",
+  openParam,
 }: {
   initial: TripDetailsFormInput;
   save: (values: TripDetailsFormInput) => Promise<ActionResult>;
   triggerLabel?: string;
   triggerVariant?: "outline" | "ghost" | "secondary";
   description?: string;
+  /** Lets a link open the sheet with `?open=<openParam>`. */
+  openParam?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  return openParam ? (
+    <LinkableSheet
+      openParam={openParam}
+      {...{ initial, save, triggerLabel, triggerVariant, description }}
+    />
+  ) : (
+    <SheetBody
+      {...{ initial, save, triggerLabel, triggerVariant, description }}
+    />
+  );
+}
+
+type SheetProps = {
+  initial: TripDetailsFormInput;
+  save: (values: TripDetailsFormInput) => Promise<ActionResult>;
+  triggerLabel: string;
+  triggerVariant: "outline" | "ghost" | "secondary";
+  description: string;
+};
+
+function LinkableSheet({
+  openParam,
+  ...props
+}: SheetProps & { openParam: string }) {
+  const state = useOpenParam(openParam);
+  return <SheetBody {...props} state={state} />;
+}
+
+function SheetBody({
+  initial,
+  save,
+  triggerLabel,
+  triggerVariant,
+  description,
+  state,
+}: SheetProps & {
+  state?: readonly [boolean, (open: boolean) => void];
+}) {
+  const local = useState(false);
+  const [open, setOpen] = state ?? local;
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>

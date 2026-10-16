@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { requireTripAccess } from "@/server/access";
 import { DomainError } from "@/server/errors";
 import { createBooking } from "@/server/services/bookings";
-import { createInvitation, removeMember } from "@/server/services/members";
+import { createInvitation } from "@/server/services/invitations";
+import { removeMember } from "@/server/services/members";
 import {
   createOption,
   resolveDecision,

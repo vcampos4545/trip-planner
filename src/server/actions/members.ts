@@ -1,21 +1,32 @@
 "use server";
 
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { MemberRole } from "@/generated/prisma/enums";
 import type { ActionResult } from "@/lib/action-result";
-import { createInvitationSchema } from "@/lib/validation/invitation";
+import {
+  createInvitationSchema,
+  emailInvitationSchema,
+} from "@/lib/validation/invitation";
+import { appOrigin, inviteUrl } from "@/server/app-url";
 import { requireActionUser } from "@/server/auth/session";
+import { getEmailProvider } from "@/server/email";
 import { checkRateLimit } from "@/server/rate-limit";
 import {
   acceptInvitation,
-  changeMemberRole,
   createInvitation,
+  inviteByEmail,
+  resendInvitation,
+  revokeInvitation,
+  setMembersCanInvite,
+  type EmailOutcome,
+} from "@/server/services/invitations";
+import {
+  changeMemberRole,
   leaveTrip,
   removeMember,
-  revokeInvitation,
+  transferOrganizer,
 } from "@/server/services/members";
 
 import { revalidateTrip } from "./revalidate";
@@ -23,24 +34,11 @@ import { runAction, toFailure } from "./run-action";
 
 const id = z.string().min(1).max(64);
 
-async function appOrigin() {
-  const configured = process.env.AUTH_URL?.replace(/\/$/, "");
-  if (configured) return configured;
-  const list = await headers();
-  const host =
-    list.get("x-forwarded-host") ?? list.get("host") ?? "localhost:3000";
-  const proto =
-    list.get("x-forwarded-proto") ??
-    (host.startsWith("localhost") ? "http" : "https");
-  return `${proto}://${host}`;
-}
-
 export async function createInvitationAction(
   tripId: string,
   raw: unknown,
 ): Promise<ActionResult<{ url: string; expiresAt: string }>> {
   return runAction(async (user) => {
-    checkRateLimit(`invite-create:${user.id}`, 20, 60 * 60_000);
     const input = createInvitationSchema.parse(raw);
     const { token, invitation } = await createInvitation(
       id.parse(tripId),
@@ -49,9 +47,42 @@ export async function createInvitationAction(
     );
     revalidateTrip(tripId);
     return {
-      url: `${await appOrigin()}/invite/${token}`,
+      url: inviteUrl(await appOrigin(), token),
       expiresAt: invitation.expiresAt.toISOString(),
     };
+  });
+}
+
+export async function inviteByEmailAction(
+  tripId: string,
+  raw: unknown,
+): Promise<
+  ActionResult<{ results: EmailOutcome[]; emailConfigured: boolean }>
+> {
+  return runAction(async (user) => {
+    const input = emailInvitationSchema.parse(raw);
+    const result = await inviteByEmail(id.parse(tripId), user.id, input, {
+      appUrl: await appOrigin(),
+      email: getEmailProvider(),
+    });
+    revalidateTrip(tripId);
+    return result;
+  });
+}
+
+export async function resendInvitationAction(
+  tripId: string,
+  invitationId: string,
+): Promise<ActionResult<EmailOutcome>> {
+  return runAction(async (user) => {
+    const result = await resendInvitation(
+      id.parse(tripId),
+      user.id,
+      id.parse(invitationId),
+      { appUrl: await appOrigin(), email: getEmailProvider() },
+    );
+    revalidateTrip(tripId);
+    return result;
   });
 }
 
@@ -61,6 +92,21 @@ export async function revokeInvitationAction(
 ): Promise<ActionResult> {
   return runAction(async (user) => {
     await revokeInvitation(id.parse(tripId), user.id, id.parse(invitationId));
+    revalidateTrip(tripId);
+    return null;
+  });
+}
+
+export async function setMembersCanInviteAction(
+  tripId: string,
+  allowed: unknown,
+): Promise<ActionResult> {
+  return runAction(async (user) => {
+    await setMembersCanInvite(
+      id.parse(tripId),
+      user.id,
+      z.boolean().parse(allowed),
+    );
     revalidateTrip(tripId);
     return null;
   });
@@ -108,6 +154,17 @@ export async function changeMemberRoleAction(
       id.parse(memberId),
       z.enum(MemberRole).parse(role),
     );
+    revalidateTrip(tripId);
+    return null;
+  });
+}
+
+export async function transferOrganizerAction(
+  tripId: string,
+  memberId: string,
+): Promise<ActionResult> {
+  return runAction(async (user) => {
+    await transferOrganizer(id.parse(tripId), user.id, id.parse(memberId));
     revalidateTrip(tripId);
     return null;
   });

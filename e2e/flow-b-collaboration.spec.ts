@@ -18,7 +18,10 @@ test("Flow B: organizer invites a friend, both see the same shared trip, outside
   });
 
   // 1. The organizer creates an invite link.
-  await organizer.page.getByRole("button", { name: "Invite" }).click();
+  await organizer.page
+    .getByRole("button", { name: "Invite", exact: true })
+    .first()
+    .click();
   const dialog = organizer.page.getByRole("dialog");
   await dialog.getByLabel("Link expires after").selectOption("3");
   await dialog.getByRole("button", { name: "Create invite link" }).click();
@@ -26,8 +29,8 @@ test("Flow B: organizer invites a friend, both see the same shared trip, outside
   expect(inviteUrl).toMatch(
     new RegExp(`^${baseURL}/invite/[A-Za-z0-9_-]{40,}$`),
   );
-  await dialog.getByRole("button", { name: "Done" }).click();
-  await expect(organizer.page.getByText("Active invite links")).toBeVisible();
+  await expect(dialog.getByText("Active invite links")).toBeVisible();
+  await organizer.page.keyboard.press("Escape");
 
   // 2. The invited user signs in and joins.
   const friend = await signIn("Felix Friend");
@@ -113,23 +116,28 @@ test("Flow B: organizer invites a friend, both see the same shared trip, outside
 test("Flow B: revoked invite links stop working", async ({ signIn }) => {
   const organizer = await signIn("Rita Revoker");
   await createTripManually(organizer.page, { title: "Revocation test" });
-  await organizer.page.getByRole("button", { name: "Invite" }).click();
+  await organizer.page
+    .getByRole("button", { name: "Invite", exact: true })
+    .first()
+    .click();
   const dialog = organizer.page.getByRole("dialog");
   await dialog.getByRole("button", { name: "Create invite link" }).click();
   const inviteUrl = await dialog.getByTestId("invite-link").inputValue();
-  await dialog.getByRole("button", { name: "Done" }).click();
-  await organizer.page.getByRole("button", { name: "Revoke" }).click();
+  await dialog
+    .getByTestId("invite-links-list")
+    .getByRole("button", { name: "Revoke" })
+    .click();
   await organizer.page
     .getByRole("alertdialog")
     .getByRole("button", { name: "Revoke" })
     .click();
-  await expect(organizer.page.getByText("Active invite links")).toHaveCount(0);
+  await expect(dialog.getByText("Active invite links")).toHaveCount(0);
 
   const latecomer = await signIn("Larry Late");
   await latecomer.page.goto(inviteUrl);
   await expect(
     latecomer.page.getByRole("heading", {
-      name: "This invite link was revoked",
+      name: "This invitation was revoked",
     }),
   ).toBeVisible();
   await latecomer.page.goto(inviteUrl.replace(/.{6}$/, "AAAAAA"));

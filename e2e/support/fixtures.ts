@@ -29,7 +29,10 @@ export async function createSignedInUser(
 ): Promise<TestUser> {
   counter += 1;
   const email = `${name.toLowerCase().replace(/\W+/g, ".")}.${Date.now()}.${counter}@example.test`;
-  const user = await prisma.user.create({ data: { name, email } });
+  // Google-verified, as the app records it at sign-in.
+  const user = await prisma.user.create({
+    data: { name, email, emailVerified: new Date() },
+  });
   const token = randomBytes(32).toString("hex");
   await prisma.session.create({
     data: {
@@ -109,6 +112,10 @@ export async function createTripManually(
   return id;
 }
 
-export async function addMemberDirectly(tripId: string, userId: string) {
-  await prisma.tripMember.create({ data: { tripId, userId, role: "MEMBER" } });
+export async function addMemberDirectly(
+  tripId: string,
+  userId: string,
+  role: "MEMBER" | "ORGANIZER" = "MEMBER",
+) {
+  await prisma.tripMember.create({ data: { tripId, userId, role } });
 }

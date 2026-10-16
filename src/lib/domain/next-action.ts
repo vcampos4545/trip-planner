@@ -10,6 +10,8 @@ export type TripProgress = {
   hasDates: boolean;
   hasTimingNotes: boolean;
   memberCount: number;
+  /** Whether the viewer may invite people. Defaults to true. */
+  canInvite?: boolean;
   pendingProposals: number;
   suggestedTasks: number;
   suggestedEvents: number;
@@ -27,7 +29,22 @@ export type NextAction = {
   title: string;
   description: string;
   tab: "overview" | "plan" | "options" | "itinerary" | "bookings" | "tasks";
+  /** A dialog on the trip page that does the step, opened instead of just showing the tab. */
+  open?: "invite" | "details";
+  /** A section of the tab to scroll to. */
+  anchor?: "proposals";
 };
+
+/**
+ * Where a next step's button goes. Dialogs open through `?open=`, which the trip page reads, and
+ * an anchor is only used for a section that exists when the step is shown.
+ */
+export function nextActionHref(tripId: string, action: NextAction) {
+  const base = `/trips/${tripId}`;
+  if (action.open) return `${base}?open=${action.open}`;
+  const path = action.tab === "overview" ? base : `${base}/${action.tab}`;
+  return action.anchor ? `${path}#${action.anchor}` : path;
+}
 
 export function nextAction(progress: TripProgress): NextAction {
   if (progress.pendingProposals > 0) {
@@ -36,6 +53,7 @@ export function nextAction(progress: TripProgress): NextAction {
       title: "Review proposed changes",
       description: `Atlas proposed ${plural(progress.pendingProposals, "change")} to the trip details. Nothing changes until someone accepts.`,
       tab: "overview",
+      anchor: "proposals",
     };
   }
   if (!progress.hasDestination) {
@@ -62,6 +80,7 @@ export function nextAction(progress: TripProgress): NextAction {
         ? "There's a rough timeframe. Settle on exact dates when the group agrees."
         : "Add dates or a flexible window so the group can plan around them.",
       tab: "overview",
+      open: "details",
     };
   }
   const vote = progress.decisionsAwaitingMyVote[0];
@@ -94,12 +113,14 @@ export function nextAction(progress: TripProgress): NextAction {
       tab: "tasks",
     };
   }
-  if (progress.memberCount <= 1) {
+  if (progress.memberCount <= 1 && progress.canInvite !== false) {
     return {
       key: "invite",
       title: "Invite your group",
-      description: "Share an invite link so everyone sees the same plan.",
+      description:
+        "Share an invite link or email your friends so everyone sees the same plan.",
       tab: "overview",
+      open: "invite",
     };
   }
   if (progress.unassignedOpenTasks > 0) {

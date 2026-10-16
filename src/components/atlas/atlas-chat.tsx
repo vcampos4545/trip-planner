@@ -11,6 +11,7 @@ import {
   Sparkles,
   Ticket,
   Undo2,
+  UserPlus,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -353,6 +354,7 @@ const EFFECT_ICONS: Record<string, typeof Check> = {
   proposal: Clock,
   suggestion: Lightbulb,
   searched: Search,
+  invited: UserPlus,
   error: CircleAlert,
 };
 

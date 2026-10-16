@@ -20,6 +20,7 @@ import {
   type ResearchProvider,
   type ResearchResult,
 } from "@/server/research";
+import { getEmailProvider, type EmailProvider } from "@/server/email";
 import { getFlightProvider, type FlightSearchProvider } from "@/server/flights";
 import { getOwnConversation } from "@/server/services/conversations";
 import { createTripFromDraft, loadTripDraft } from "@/server/services/trips";
@@ -75,6 +76,10 @@ type Dependencies = {
   provider?: LlmProvider | null;
   research?: ResearchProvider;
   flights?: FlightSearchProvider | null;
+  /** Email for invitations Atlas sends. Defaults to the configured provider, if any. */
+  email?: EmailProvider | null;
+  /** Public origin for invite links. Without it, Atlas can't create invites. */
+  appUrl?: string;
   now?: Date;
 };
 
@@ -166,6 +171,14 @@ export async function sendAtlasMessage(
         shownFlights.map((item) => [item.resultId, item.offer]),
       ),
       newFlightResultIds: [],
+      invites: deps.appUrl
+        ? {
+            appUrl: deps.appUrl,
+            email: deps.email === undefined ? getEmailProvider() : deps.email,
+            userMessage: content,
+            links: [],
+          }
+        : undefined,
     };
   } else {
     draftForPrompt = parseDraft(conversation.draft);
@@ -228,7 +241,10 @@ export async function sendAtlasMessage(
       data: {
         conversationId: conversation.id,
         role: "ASSISTANT",
-        content: labelTestData(result.text, effects),
+        content: withInviteLinks(
+          labelTestData(result.text, effects),
+          context.phase === "trip" ? (context.invites?.links ?? []) : [],
+        ),
         model: `${provider.id}:${result.model}`,
         metadata: {
           effects,
@@ -263,7 +279,10 @@ export async function sendAtlasMessage(
       data: {
         conversationId: conversation.id,
         role: "NOTICE",
-        content: notice,
+        content: withInviteLinks(
+          notice,
+          context.phase === "trip" ? (context.invites?.links ?? []) : [],
+        ),
         metadata: {
           effects,
           error: kind,
@@ -338,6 +357,24 @@ export const TEST_DATA_REPLY_NOTICE =
  * Test flight data must never read as real. If a tool returned test data and the reply does not
  * already say so, a plain notice is added to the reply.
  */
+/**
+ * Adds invite links made this turn under the reply. The server adds them, so the token never goes
+ * to the model, and history sent back to the model has them hidden (see `hideInviteTokens`).
+ */
+export function withInviteLinks(
+  text: string,
+  links: { label: string; url: string }[],
+) {
+  if (links.length === 0) return text;
+  return `${text.trimEnd()}\n\n${links.map((link) => `${link.label}: ${link.url}`).join("\n")}`;
+}
+
+const INVITE_TOKEN_PATTERN = /\/invite\/[A-Za-z0-9_-]{40,64}/g;
+
+export function hideInviteTokens(text: string) {
+  return text.replace(INVITE_TOKEN_PATTERN, "/invite/[link hidden]");
+}
+
 export function labelTestData(text: string, effects: ToolEffect[]) {
   if (!effects.some((effect) => effect.testData)) return text;
   if (/test data/i.test(text)) return text;
@@ -353,7 +390,7 @@ async function loadHistory(conversationId: string): Promise<ChatTurn[]> {
   });
   return recent.reverse().map((message) => ({
     role: message.role === "USER" ? "user" : "assistant",
-    content: message.content,
+    content: hideInviteTokens(message.content),
   }));
 }
 

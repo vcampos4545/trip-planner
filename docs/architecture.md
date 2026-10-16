@@ -27,8 +27,9 @@ never do something the signed-in user could not do by hand.
   "not found" response as a trip that does not exist, so trip IDs cannot be probed.
 - Child records are always looked up with both their ID and the caller's trip ID
   (`findFirst({ where: { id, tripId } })`). A valid ID from another trip is not found.
-- Organizer-only operations (invites, member management, resolving decisions, deleting the trip,
-  approving options) use `requireOrganizer`.
+- Organizer-only operations (member management, invite settings, resolving decisions, deleting
+  the trip, approving options) use `requireOrganizer`. Creating invitations uses `requireInviter`:
+  an organizer, or any member when the trip's `membersCanInvite` is on.
 
 ## Data model
 
@@ -37,7 +38,7 @@ The Prisma schema (`prisma/schema.prisma`) is normalized around `Trip`:
 | Area         | Tables                                                                  |
 | ------------ | ----------------------------------------------------------------------- |
 | Identity     | `User`, `Account`, `Session`, `VerificationToken` (Auth.js)             |
-| Membership   | `TripMember` (organizer or member), `TripInvitation` (hashed tokens)    |
+| Membership   | `TripMember` (organizer or member), `TripInvitation` (links and email)  |
 | Trip profile | `Trip` (details, airports, theme), `TripStop`, `TripPreference`         |
 | Atlas        | `Conversation` (one per user per trip), `Message`, `TripDetailProposal` |
 | Research     | `ResearchOption` (with provenance), `OptionNote`                        |
@@ -150,6 +151,8 @@ Defined in `src/server/ai/tools.ts`, each with a Zod schema that doubles as a st
 | `suggest_task`                    | Create a task in "suggested" state                             |
 | `propose_itinerary_event`         | Create an itinerary item in "suggested" state                  |
 | `summarize_outstanding_decisions` | Open votes, proposals, suggestions, unassigned tasks, gaps     |
+| `create_invite_link`              | Create an invite link; the server adds it under the reply      |
+| `invite_by_email`                 | Email invitations to addresses the user typed this message     |
 
 Rules enforced in code, not just in the prompt:
 
@@ -178,6 +181,11 @@ Rules enforced in code, not just in the prompt:
 - On a trip with one member, proposal effects read "Needs your OK" and the chat shows Accept and
   Decline under the reply; the instructions tell Atlas never to mention a group. With several
   members, a proposal waits for any member to accept it on the Overview tab.
+- Invite tools call the same invitation services as the dialog, so permissions and rate limits
+  are the same. `create_invite_link` never returns the token to the model: the orchestrator adds
+  the links under the saved reply (`withInviteLinks`), and history sent back to the model hides
+  invite tokens (`hideInviteTokens`). `invite_by_email` refuses any address that is not in the
+  user's message for this turn, and reports honestly when email is not configured.
 - The UI shows the tool effects under each reply, so what Atlas says it did can be checked against
   what actually happened.
 - When a reply follows live searches, the orchestrator stores the results' titles, URLs, source
@@ -405,6 +413,42 @@ and all-day items span the days they cover. An event linked to a booking that is
 calendar is shown once. A "Who's flying when" strip lists every traveler's flights. Small screens
 start on a three-day range, with week and single-day ranges available.
 
+## Invitations and membership
+
+Services: `src/server/services/invitations.ts` and `src/server/services/members.ts`. Pure rules
+(status, who may invite, the leave rules, parsing addresses) are in
+`src/lib/domain/invitations.ts`.
+
+- A `TripInvitation` without `email` is a shareable link: anyone signed in can use it until it
+  expires, is revoked, or reaches `maxUses`. With `email` set it is bound to that lowercased
+  address (`maxUses` 1) and can only be accepted by a user whose email matches and is verified.
+  Auth.js leaves `emailVerified` empty for OAuth users, so the `signIn` event in `src/auth.ts`
+  sets it when Google reports `email_verified`.
+- Status is derived, not stored: pending, accepted (`acceptedAt`), expired, revoked, or used up.
+  Acceptance claims a use with one conditional `updateMany`, so a limited link can't be over-used
+  by concurrent joins.
+- Inviting an address that already has a pending invitation renews it with a new token. Resending
+  replaces the token too, so only the latest link works. Tokens are never stored; the raw link is
+  returned once, to the inviter, or emailed.
+- Email goes through `EmailProvider` (`src/server/email`), with one implementation: Resend over
+  its REST API. Without `RESEND_API_KEY` and `EMAIL_FROM` the provider is null, the invitation is
+  still created, and the link comes back with outcome `not_sent`. `sent` is only reported after
+  Resend accepted the message, and a rejection comes back as `failed` with the link.
+- The join page lives outside the signed-in layout and is not covered by the proxy, so signed-out
+  visitors see the preview (trip title, dates, first organizer's name, member count, expiry, and a
+  masked invited address) and sign in with a `callbackUrl` back to the invite. A revoked or unknown
+  token reveals nothing about the trip.
+- Leaving: the only member can't leave, and an organizer can't leave while they are the only
+  organizer (`leaveBlock`). Demoting the last organizer is refused. Role changes, removals,
+  transfers, and leaving lock the trip row (`SELECT ... FOR UPDATE`) inside the transaction, so
+  two organizers stepping down at once can't leave a trip without one.
+- Activity entries: `INVITE_CREATED`, `INVITE_SENT`, `INVITE_ACCEPTED`, `INVITE_REVOKED`,
+  `INVITE_SETTINGS_CHANGED`, `MEMBER_ROLE_CHANGED`, `MEMBER_REMOVED`, and `MEMBER_LEFT`. Invited
+  addresses appear masked, since the person is not a member yet.
+- The trip layout renders one invite dialog (`InviteProvider`). The header button, the next-step
+  card, and the members card open it, and `?open=invite` opens it from a link such as a dashboard
+  card. Next steps carry an explicit target (`open` or `anchor`) instead of a fixed anchor.
+
 ## Financial data (future)
 
 `src/server/financial/provider.ts` documents a `FinancialDataProvider` interface for a future,
@@ -417,9 +461,10 @@ provider tokens are kept, and recommendations rely only on data the provider act
 
 - Secrets are read only on the server. The only public variable is `NEXT_PUBLIC_APP_NAME`.
 - Invitation tokens are 32 random bytes; only their SHA-256 hash is stored. Links expire,
-  can be revoked, and can have a use limit that is enforced atomically.
-- Sensitive endpoints (Atlas messages, invite creation, invite acceptance) have an in-memory rate
-  limit.
+  can be revoked, and can have a use limit that is enforced atomically. Email invitations only
+  work for the matching verified address. The join page sets `referrer: no-referrer`.
+- Sensitive endpoints (Atlas messages, invite creation, invitation emails, invite acceptance)
+  have an in-memory rate limit.
 - Model output is rendered as React nodes, never as HTML. Markdown links in Atlas replies become
   links only for `http(s)` URLs. Links from users, providers, or Atlas open with
   `rel="noopener noreferrer nofollow"`.

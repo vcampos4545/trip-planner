@@ -38,6 +38,7 @@ model User {
   tripsUpdated       Trip[]               @relation("TripUpdatedBy")
   invitationsCreated TripInvitation[]     @relation("InvitationCreatedBy")
   invitationsRevoked TripInvitation[]     @relation("InvitationRevokedBy")
+  invitationsUsed    TripInvitation[]     @relation("InvitationAcceptedBy")
   preferencesCreated TripPreference[]
   optionsCreated     ResearchOption[]     @relation("OptionCreatedBy")
   optionsUpdated     ResearchOption[]     @relation("OptionUpdatedBy")
@@ -196,6 +197,8 @@ model Trip {
   localTransportStatus ArrangementStatus @default(UNKNOWN)
   activitiesStatus     ArrangementStatus @default(UNKNOWN)
   currency             String            @default("USD") @db.Char(3)
+  // Whether members who are not organizers may invite people. Organizers always can.
+  membersCanInvite     Boolean           @default(false)
   isSample             Boolean           @default(false)
   version              Int               @default(1)
   createdById          String
@@ -256,25 +259,38 @@ model TripStop {
   @@index([tripId, position])
 }
 
+/// An invitation to join a trip. With `email` set it is bound to that address and only a signed-in
+/// user whose verified email matches can accept it; without it, it is a link anyone signed in can
+/// use until it expires, is revoked, or reaches `maxUses`.
 model TripInvitation {
-  id          String     @id @default(cuid())
-  tripId      String
-  // Only a SHA-256 hash of the invitation token is stored.
-  tokenHash   String     @unique
-  role        MemberRole @default(MEMBER)
-  createdById String
-  expiresAt   DateTime
-  maxUses     Int?
-  useCount    Int        @default(0)
-  revokedAt   DateTime?
-  revokedById String?
-  createdAt   DateTime   @default(now())
+  id           String     @id @default(cuid())
+  tripId       String
+  // Only a SHA-256 hash of the invitation token is stored. Resending an email invitation replaces
+  // the token, so an earlier link stops working.
+  tokenHash    String     @unique
+  role         MemberRole @default(MEMBER)
+  // Lowercased address for an email invitation. Null for a shareable link.
+  email        String?
+  createdById  String
+  expiresAt    DateTime
+  maxUses      Int?
+  useCount     Int        @default(0)
+  // Email invitations only: when the invitation was last emailed, and how many times.
+  lastSentAt   DateTime?
+  sendCount    Int        @default(0)
+  acceptedAt   DateTime?
+  acceptedById String?
+  revokedAt    DateTime?
+  revokedById  String?
+  createdAt    DateTime   @default(now())
 
-  trip      Trip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  createdBy User  @relation("InvitationCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
-  revokedBy User? @relation("InvitationRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+  trip       Trip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdBy  User  @relation("InvitationCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  revokedBy  User? @relation("InvitationRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+  acceptedBy User? @relation("InvitationAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
 
   @@index([tripId, createdAt])
+  @@index([tripId, email])
 }
 
 enum PreferenceKind {
@@ -750,7 +766,10 @@ enum ActivityType {
   MEMBER_REMOVED
   MEMBER_ROLE_CHANGED
   INVITE_CREATED
+  INVITE_SENT
+  INVITE_ACCEPTED
   INVITE_REVOKED
+  INVITE_SETTINGS_CHANGED
   PREFERENCE_ADDED
   PREFERENCE_REMOVED
   PROPOSAL_CREATED

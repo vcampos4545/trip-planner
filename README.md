@@ -28,6 +28,15 @@ treating each chat as a one-off.
   trip?" when only the dates and places suggest it. Once the theme is known it proposes a better
   working title, such as "Out West ski trip", and suggests the usual tasks (rentals, lift passes,
   lessons, gear) for you to accept.
+- **Inviting your group.** The **Invite** button in the trip header, the "Invite your group" next
+  step, and the members card all open one dialog. Share a link (pick the role, expiry, and an
+  optional use limit, then copy it or use your phone's share sheet), or invite people by email.
+  Each email invitation only works for the Google account with that address. Pending invitations
+  show their status, with **Resend** and **Revoke**. Ask Atlas to "invite my friends" and it adds
+  a link under its reply. See [Invitations and email](#invitations-and-email).
+- **Members.** Organizers change roles, remove members, and hand the organizer role to someone
+  else. Anyone can leave, except the only member, and an organizer can't leave until someone else
+  is an organizer.
 - **One-person trips.** When you are the only member, nothing waits for "the group": a change
   Atlas proposes to something already set can be accepted or declined right in the chat.
 - **Flight search in Bookings.** Bookings > Flights has the flight search. Saving a result as
@@ -165,6 +174,51 @@ explains that sign-in is not configured.
 Sessions are stored in the database (the `Session` table), last 30 days, and are refreshed daily.
 Google access, refresh, and ID tokens are dropped before the account link is saved because the app
 does not call Google APIs.
+
+## Invitations and email
+
+Organizers invite people from the **Invite** dialog. By default only organizers can invite; an
+organizer can tick **Let members invite people** in the same dialog. Members who are allowed can
+invite people as members (not organizers) and manage only the invitations they created. All of
+this is checked on the server.
+
+- **Share a link.** Anyone signed in can join with it until it expires (`INVITE_TTL_DAYS` sets the
+  default, 1 to 30 days), is revoked, or reaches its use limit. The link is shown once; only a
+  hash of its token is stored.
+- **Invite by email.** Each address gets its own invitation, bound to that address. Only a
+  signed-in user whose Google-verified email matches can accept it. Inviting the same address
+  again renews the pending invitation, and **Resend** sends a fresh link (the earlier one stops
+  working).
+- **The join page** (`/invite/<token>`) shows a preview first: trip name, dates, an organizer's
+  name, and how many people are planning. Signed-out visitors get **Sign in with Google to join**
+  and come back to the invite after signing in. Expired, revoked, used-up, already-accepted, and
+  wrong-account invitations each say what happened and what to do.
+- **Atlas** creates a link when an organizer asks ("invite my friends") through the same services
+  and permissions. The server adds the link under the reply, so the token is never sent to the
+  model. Atlas only emails invitations when you ask it to and type the addresses in that message.
+- Creating invitations and sending invitation emails are rate limited per user.
+
+### Email with Resend
+
+Invitation emails go through [Resend](https://resend.com).
+
+1. Create an API key at https://resend.com/api-keys, and verify the domain you send from under
+   **Domains** (Resend's `onboarding@resend.dev` sender only delivers to your own address).
+2. Set both values in `.env`:
+
+   ```bash
+   RESEND_API_KEY="re_..."
+   EMAIL_FROM="Trip Planner <trips@your-domain.com>"
+   ```
+
+3. Restart the app.
+
+Without both values, email invitations are still created. The dialog says email sending isn't set
+up and shows each person's link to copy and send yourself. The app never says an email was sent
+unless Resend accepted it; if Resend rejects a message, the dialog says so and shows the link.
+
+To add another email service, implement `EmailProvider` in `src/server/email/types.ts` and select
+it in `src/server/email/index.ts`.
 
 ## OpenAI
 
@@ -337,6 +391,9 @@ data. If Atlas leaves that out, the app adds the notice to the reply. Live token
 | `DUFFEL_ACCESS_TOKEN`            | For Duffel  | Duffel test token (`duffel_test_...`)                           |
 | `DUFFEL_API_URL`                 | No          | Duffel API base URL. The end-to-end tests point it at a stub    |
 | `INVITE_TTL_DAYS`                | No          | Default invite link lifetime in days (1 to 30). Defaults to 7   |
+| `RESEND_API_KEY`                 | For email   | Resend API key for invitation emails. Empty sends no email      |
+| `EMAIL_FROM`                     | For email   | Sender, such as `Trip Planner <trips@your-domain.com>`          |
+| `RESEND_API_URL`                 | No          | Resend API base URL. Defaults to `https://api.resend.com`       |
 | `TEST_DATABASE_URL`              | No          | Overrides the test database URL. Its name must end with `_test` |
 | `POSTGRES_PORT`                  | No          | Host port for the Docker database. Defaults to 5433             |
 
@@ -369,7 +426,9 @@ Only `NEXT_PUBLIC_APP_NAME` reaches the browser. Everything else stays on the se
   OpenAI web search provider, and the SerpApi and Duffel flight providers and the flight search
   cache against mocked clients, stop changes and validation, the theme question, matching a
   purchase to flights shown earlier, and the calendar layout). `integration` runs against
-  `trip_planner_test` and covers authorization, invitations, concurrency, saving flights, the
+  `trip_planner_test` and covers authorization, invitations (links, email-bound invitations with
+  a recording email provider, who may invite, resend, revoke, and rate limits), membership
+  changes and the leave rules, concurrency, saving flights, the
   database search cache, and the Atlas orchestrator with a scripted provider, including a replay
   of a multi-stop ski trip with a friend's rides and flights bought after earlier searches.
 - `pnpm test:e2e` runs Playwright against a production build and the test database. Install the
@@ -379,7 +438,7 @@ Only `NEXT_PUBLIC_APP_NAME` reaches the browser. Everything else stays on the se
   app with OpenAI web search served by the stub (3312), the app with web search selected but no key
   (3313), the app with Atlas and flight search pointed at a local SerpApi stub (3314), the SerpApi
   stub (3317), the Duffel stub (3318), and the OpenAI stub (3319). No test calls the real OpenAI,
-  SerpApi, or Duffel API. Test users get sessions inserted directly into the test database; the app
+  SerpApi, Duffel, or Resend API, and the end-to-end servers run without an email key. Test users get sessions inserted directly into the test database; the app
   has no test-only sign-in route. Flow I replays the Park City trip end to end through the stubs
   and checks Bookings > Flights, the week view, and that nothing mentions a group on a one-person
   trip.
@@ -405,6 +464,7 @@ src/server/          server-only code
   actions/           server actions used by the UI
   ai/                Atlas orchestrator, tools, prompts, provider interface, OpenAI provider
   research/          research provider interface, OpenAI web search, and "not configured"
+  email/             email provider interface, Resend, and the invitation email
   flights/           flight search provider interface, SerpApi and Duffel, and the search cache
   financial/         documented extension point for future card and rewards data
 tests/               Vitest unit and integration tests

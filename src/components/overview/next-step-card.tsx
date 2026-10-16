@@ -1,9 +1,12 @@
-import { ArrowRight, Compass } from "lucide-react";
+"use client";
+
+import { ArrowRight, Compass, UserPlus } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 
+import { useInvite } from "@/components/members/invite-provider";
 import { Button } from "@/components/ui/button";
-import type { NextAction } from "@/lib/domain/next-action";
+import { nextActionHref, type NextAction } from "@/lib/domain/next-action";
 
 export function NextStepCard({
   tripId,
@@ -12,11 +15,7 @@ export function NextStepCard({
   tripId: string;
   action: NextAction;
 }) {
-  const href = (
-    action.tab === "overview"
-      ? `/trips/${tripId}#proposals`
-      : `/trips/${tripId}/${action.tab}`
-  ) as Route;
+  const { canInvite, openInvite } = useInvite();
   return (
     <section
       aria-label="Next step"
@@ -36,12 +35,22 @@ export function NextStepCard({
           <p className="text-sm text-muted-foreground">{action.description}</p>
         </div>
       </div>
-      <Button asChild className="shrink-0">
-        <Link href={href}>
-          Continue
-          <ArrowRight aria-hidden />
-        </Link>
-      </Button>
+      {action.open === "invite" && canInvite ? (
+        <Button className="shrink-0" onClick={openInvite}>
+          <UserPlus aria-hidden />
+          Invite people
+        </Button>
+      ) : (
+        <Button asChild className="shrink-0">
+          <Link
+            href={nextActionHref(tripId, action) as Route}
+            scroll={!action.open}
+          >
+            Continue
+            <ArrowRight aria-hidden />
+          </Link>
+        </Button>
+      )}
     </section>
   );
 }

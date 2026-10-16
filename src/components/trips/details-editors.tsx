@@ -21,6 +21,7 @@ export function TripDetailsEditButton({
     <EditDetailsSheet
       initial={initial}
       triggerLabel={triggerLabel}
+      openParam="details"
       save={(values) => updateTripDetailsAction(tripId, values, version)}
     />
   );

@@ -17,11 +17,22 @@ export async function resetDatabase() {
 
 let counter = 0;
 
-export async function createUser(name = "Test User") {
+/**
+ * Creates a user. `verified` mirrors a Google sign-in, where the app records that Google verified
+ * the address.
+ */
+export async function createUser(
+  name = "Test User",
+  options: { email?: string; verified?: boolean } = {},
+) {
   counter += 1;
   const slug = `${name.toLowerCase().replace(/\s+/g, ".")}.${Date.now()}.${counter}`;
   const user = await db.user.create({
-    data: { name, email: `${slug}@example.test` },
+    data: {
+      name,
+      email: options.email ?? `${slug}@example.test`,
+      emailVerified: options.verified === false ? null : new Date(),
+    },
   });
   return { id: user.id, name: user.name, email: user.email, image: null };
 }

@@ -54,6 +54,11 @@ const LIVE_SEARCH_RULES = `Live search rules:
 - Mention a price or availability only if the result includes it, and say which source stated it and that it was retrieved just now. Never estimate or invent prices or availability.
 - If search_options fails or is unavailable, say live research failed. Do not present general knowledge as live results.`;
 
+const INVITE_RULES = `Inviting people:
+- When the user asks to invite people or share the trip ("invite my friends"), create a link with create_invite_link. The link appears under your reply automatically; never write a URL or a placeholder for it.
+- Use invite_by_email only when the user explicitly asks you to email invitations and types the addresses in this message. Never guess, complete, or reuse addresses. If email sending is not set up, say nothing was emailed.
+- If a tool says the user can't invite people, tell them an organizer can invite people or let members invite.`;
+
 const BOOKING_RULES = `Bookings the user made:
 - When the user says they bought or booked something, or that it is arranged (a flight, a stay, a friend driving them between stops), record it with record_booking in the same turn, for them or for the trip member they name. Their word is enough; never ask anyone else to confirm it.
 - For a flight from results shown earlier, fill fromShownFlight with what the user said (airline, times, date). If record_booking says it is ambiguous, ask which flight they mean. If nothing matches, ask for the details.
@@ -122,6 +127,7 @@ export function buildInstructions(params: {
       ? `Flights shown earlier in this conversation (resultId: details). Prices were as shown then and may have changed. Use them to record a flight the user says they bought:\n${shown.map((item) => `- ${item.resultId}: ${describeMatch({ resultId: item.resultId, offer: item.offer, slices: item.offer.slices, leg: item.offer.slices.length > 1 ? "round trip" : item.offer.pendingReturn ? "outbound" : "one way" })}; ${item.offer.totalAmount} ${item.offer.totalCurrency} total for ${item.offer.passengers} (${item.offer.sourceName})`).join("\n")}`
       : null,
     params.phase === "trip" ? BOOKING_RULES : null,
+    params.phase === "trip" ? INVITE_RULES : null,
     params.phase === "trip"
       ? params.soloTrip
         ? "This trip has one member: the user. Nothing waits for a group, so never say anything is awaiting group confirmation. Changes to details someone already set still need the user's OK, which they give with the buttons under your reply."

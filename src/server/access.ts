@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { MemberRole } from "@/generated/prisma/enums";
+import { canInvite } from "@/lib/domain/invitations";
 import { db, type DbTransaction } from "@/server/db";
 import { forbidden, notFound } from "@/server/errors";
 
@@ -52,6 +53,25 @@ export async function requireOrganizer(
   if (!access.isOrganizer)
     throw forbidden("Only a trip organizer can do that.");
   return access;
+}
+
+/**
+ * Requires a member who may invite people: an organizer, or any member when the organizers let
+ * members invite.
+ */
+export async function requireInviter(
+  tripId: string,
+  userId: string,
+  client: Client = db,
+) {
+  const access = await requireTripAccess(tripId, userId, client);
+  const trip = await client.trip.findUniqueOrThrow({
+    where: { id: access.tripId },
+    select: { membersCanInvite: true },
+  });
+  if (!canInvite(access.role, trip.membersCanInvite))
+    throw forbidden("Only organizers can invite people to this trip.");
+  return { ...access, membersCanInvite: trip.membersCanInvite };
 }
 
 /** Ensures a trip member ID (for assignees and participants) belongs to the same trip. */
