@@ -237,13 +237,14 @@ describe("Atlas with SerpApi", () => {
     });
     expect(reply.content).not.toMatch(/test data/i);
 
-    // Asked explicitly: Atlas searches and loads the returns for the first result.
+    // Asked explicitly: Atlas searches and loads the returns for the first result. Result IDs
+    // continue from the earlier turn, whose result (f1) is still listed for Atlas.
     const second = new ScriptedProvider([
       {
         calls: [
           searchCall,
-          { name: "search_return_flights", args: { resultId: "f1" } },
-          { name: "save_flight_option", args: { resultId: "f2" } },
+          { name: "search_return_flights", args: { resultId: "f2" } },
+          { name: "save_flight_option", args: { resultId: "f3" } },
         ],
         reply: "I saved the round trip with the 11:00 return.",
       },
@@ -253,6 +254,12 @@ describe("Atlas with SerpApi", () => {
       conversation.id,
       "Show return flights for the first one and save it",
       { provider: second, flights },
+    );
+    expect(second.requests[0]!.instructions).toContain(
+      "Flights shown earlier in this conversation",
+    );
+    expect(second.requests[0]!.instructions).toContain(
+      "- f1: TAP Air Portugal",
     );
     expect(flights.returnRequests).toHaveLength(1);
     expect(flights.returnRequests[0]!.pendingReturn?.token).toBe("dep_token_1");

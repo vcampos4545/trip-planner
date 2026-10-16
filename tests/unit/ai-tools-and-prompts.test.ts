@@ -36,7 +36,7 @@ describe("tool schemas", () => {
       toolsFor("draft")
         .map((tool) => tool.name)
         .sort(),
-    ).toEqual(["get_trip_state", "update_trip_details"]);
+    ).toEqual(["get_trip_state", "update_trip_details", "update_trip_stops"]);
     expect(toolsFor("trip").map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
         "search_options",

@@ -3,6 +3,8 @@ import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { ASSISTANT_NAME } from "@/config/brand";
 import { todayDateOnly } from "@/lib/dates";
+import { isShownFlight, type ShownFlight } from "@/lib/domain/flight-match";
+import { THEME_TASKS } from "@/lib/domain/theme";
 import {
   isEstablishable,
   parseDraft,
@@ -20,8 +22,7 @@ import {
 } from "@/server/research";
 import { getFlightProvider, type FlightSearchProvider } from "@/server/flights";
 import { getOwnConversation } from "@/server/services/conversations";
-import { tripToDetails } from "@/server/services/trip-mapping";
-import { createTripFromDraft } from "@/server/services/trips";
+import { createTripFromDraft, loadTripDraft } from "@/server/services/trips";
 
 import { getAiStatus } from "./config";
 import { buildInstructions } from "./prompts";
@@ -41,6 +42,9 @@ import {
 
 export const MAX_MESSAGE_LENGTH = 4000;
 const HISTORY_TURNS = 30;
+/** How many recent replies to scan for flight results Atlas showed. */
+const FLIGHT_RESULT_MESSAGES = 12;
+const MAX_SHOWN_FLIGHTS = 24;
 const MAX_TOOL_ROUNDS = 5;
 const REPLY_TIMEOUT_MS = 90_000;
 
@@ -55,6 +59,8 @@ export type MessageSource = {
 export type MessageMetadata = {
   effects?: ToolEffect[];
   sources?: MessageSource[];
+  /** Flight results first shown with this reply, kept so later turns can refer back to them. */
+  flightResults?: ShownFlight[];
   error?: ProviderErrorKind;
 };
 
@@ -136,22 +142,30 @@ export async function sendAtlasMessage(
   let context: AtlasContext;
   let draftForPrompt: TripDraft;
   let memberNames: string[] | undefined;
+  let shownFlights: ShownFlight[] = [];
+  let themeTasksPending = false;
   const startMode = conversation.startMode ?? "MANUAL";
 
   if (access) {
     const loaded = await loadTripContextDraft(access);
     draftForPrompt = loaded.draft;
     memberNames = loaded.memberNames;
+    themeTasksPending = loaded.themeTasksPending;
+    shownFlights = await loadShownFlights(conversation.id);
     context = {
       phase: "trip",
       user,
       conversationId: conversation.id,
       effects,
       access,
+      soloTrip: loaded.memberNames.length === 1,
       research,
       searchResults: new Map(),
       flights,
-      flightResults: new Map(),
+      flightResults: new Map(
+        shownFlights.map((item) => [item.resultId, item.offer]),
+      ),
+      newFlightResultIds: [],
     };
   } else {
     draftForPrompt = parseDraft(conversation.draft);
@@ -189,6 +203,9 @@ export async function sendAtlasMessage(
     researchUnavailableReason: research.unavailableReason ?? null,
     flightSearch: !flights ? "off" : flights.testMode ? "test" : "live",
     flightSource: flights?.label,
+    soloTrip: context.phase === "trip" ? context.soloTrip : true,
+    shownFlights,
+    themeTasksPending,
   });
 
   let replied = false;
@@ -205,6 +222,8 @@ export async function sendAtlasMessage(
       context.phase === "trip"
         ? sourcesFrom(context.searchResults.values())
         : [];
+    const flightResults =
+      context.phase === "trip" ? newFlightResults(context) : [];
     await db.message.create({
       data: {
         conversationId: conversation.id,
@@ -214,6 +233,7 @@ export async function sendAtlasMessage(
         metadata: {
           effects,
           ...(sources.length > 0 ? { sources } : {}),
+          ...(flightResults.length > 0 ? { flightResults } : {}),
         } satisfies MessageMetadata as unknown as Prisma.InputJsonValue,
       },
     });
@@ -237,6 +257,8 @@ export async function sendAtlasMessage(
         ? `Before the error, these changes were saved: ${committed.map((effect) => effect.summary).join("; ")}.`
         : "Nothing in the trip was changed.",
     ].join(" ");
+    const flightResults =
+      context.phase === "trip" ? newFlightResults(context) : [];
     await db.message.create({
       data: {
         conversationId: conversation.id,
@@ -245,6 +267,7 @@ export async function sendAtlasMessage(
         metadata: {
           effects,
           error: kind,
+          ...(flightResults.length > 0 ? { flightResults } : {}),
         } satisfies MessageMetadata as unknown as Prisma.InputJsonValue,
       },
     });
@@ -260,6 +283,38 @@ export async function sendAtlasMessage(
     return { replied, tripId, tripCreated: true, effects };
   }
   return { replied, tripId: conversation.tripId, tripCreated: false, effects };
+}
+
+function newFlightResults(context: {
+  flightResults: Map<string, ShownFlight["offer"]>;
+  newFlightResultIds: string[];
+}): ShownFlight[] {
+  return context.newFlightResultIds.flatMap((resultId) => {
+    const offer = context.flightResults.get(resultId);
+    return offer ? [{ resultId, offer }] : [];
+  });
+}
+
+/**
+ * Flight results shown in this conversation's recent replies, oldest first. A later turn uses
+ * them to resolve "I bought the Southwest flight" to the exact result that was shown.
+ */
+export async function loadShownFlights(
+  conversationId: string,
+): Promise<ShownFlight[]> {
+  const recent = await db.message.findMany({
+    where: { conversationId, role: { in: ["ASSISTANT", "NOTICE"] } },
+    orderBy: { createdAt: "desc" },
+    take: FLIGHT_RESULT_MESSAGES,
+    select: { metadata: true },
+  });
+  const shown: ShownFlight[] = [];
+  for (const message of recent.reverse()) {
+    const metadata = message.metadata as { flightResults?: unknown } | null;
+    if (!Array.isArray(metadata?.flightResults)) continue;
+    shown.push(...metadata.flightResults.filter(isShownFlight));
+  }
+  return shown.slice(-MAX_SHOWN_FLIGHTS);
 }
 
 function sourcesFrom(results: Iterable<ResearchResult>): MessageSource[] {
@@ -303,41 +358,33 @@ async function loadHistory(conversationId: string): Promise<ChatTurn[]> {
 }
 
 async function loadTripContextDraft(access: TripAccess) {
-  const [trip, preferences, candidates, members] = await Promise.all([
-    db.trip.findUniqueOrThrow({ where: { id: access.tripId } }),
-    db.tripPreference.findMany({
-      where: { tripId: access.tripId },
-      select: { kind: true, strength: true, description: true },
-      take: 40,
-    }),
-    db.researchOption.findMany({
-      where: {
-        tripId: access.tripId,
-        category: "DESTINATION",
-        status: { notIn: ["REJECTED", "CANCELLED"] },
-      },
-      select: { title: true, rationale: true, origin: true },
-      take: 12,
+  const [draft, trip, members] = await Promise.all([
+    loadTripDraft(access),
+    db.trip.findUniqueOrThrow({
+      where: { id: access.tripId },
+      select: { theme: true },
     }),
     db.tripMember.findMany({
       where: { tripId: access.tripId },
       select: { user: { select: { name: true } } },
     }),
   ]);
-  const draft: TripDraft = {
-    details: tripToDetails(trip),
-    preferences,
-    candidateDestinations: candidates.map((candidate) => ({
-      name: candidate.title,
-      reason: candidate.rationale,
-      suggestedBy: candidate.origin === "ATLAS" ? "atlas" : "user",
-    })),
-  };
+  const themeTasks = trip.theme ? (THEME_TASKS[trip.theme] ?? []) : [];
+  const existingThemeTasks =
+    themeTasks.length > 0
+      ? await db.task.count({
+          where: {
+            tripId: access.tripId,
+            title: { in: themeTasks.map((task) => task.title) },
+          },
+        })
+      : 0;
   return {
     draft,
     memberNames: members.map(
       (member) => member.user.name?.split(/\s+/)[0] ?? "Member",
     ),
+    themeTasksPending: themeTasks.length > 0 && existingThemeTasks === 0,
   };
 }
 

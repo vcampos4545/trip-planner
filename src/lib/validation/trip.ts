@@ -8,6 +8,7 @@ import {
   PreferenceKind,
   PreferenceStrength,
   TripStage,
+  TripTheme,
 } from "@/generated/prisma/enums";
 
 import {
@@ -27,7 +28,12 @@ export const tripDetailsFormSchema = z
     destination: optionalText(160),
     destinationConfirmed: z.boolean(),
     departureLocation: optionalText(160),
+    flyIntoAirport: optionalText(160),
+    flyOutOfAirport: optionalText(160),
     tripStyle: optionalText(300),
+    theme: z
+      .enum([...Object.values(TripTheme), ""])
+      .transform((value) => (value === "" ? null : value)),
     startDate: optionalDate,
     endDate: optionalDate,
     dateFlexibility: z.enum(DateFlexibility),

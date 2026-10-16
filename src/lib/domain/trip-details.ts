@@ -7,10 +7,13 @@ import {
   DateFlexibility,
   PreferenceKind,
   PreferenceStrength,
+  TripTheme,
   type TripStartMode,
 } from "@/generated/prisma/enums";
 import { isDateOnly } from "@/lib/dates";
 import { isMoneyString } from "@/lib/money";
+
+import { MAX_STOPS, stopInputSchema } from "./stops";
 
 /**
  * The structured trip profile that Atlas reads and updates.
@@ -35,7 +38,10 @@ export const tripDetailsSchema = z.object({
   destination: z.string().trim().max(160).nullable(),
   destinationConfirmed: z.boolean(),
   departureLocation: z.string().trim().max(160).nullable(),
+  flyIntoAirport: z.string().trim().max(160).nullable(),
+  flyOutOfAirport: z.string().trim().max(160).nullable(),
   tripStyle: z.string().trim().max(300).nullable(),
+  theme: z.enum(TripTheme).nullable(),
   startDate: dateOnly.nullable(),
   endDate: dateOnly.nullable(),
   dateFlexibility: z.enum(DateFlexibility),
@@ -67,7 +73,10 @@ export const EMPTY_TRIP_DETAILS: TripDetails = {
   destination: null,
   destinationConfirmed: false,
   departureLocation: null,
+  flyIntoAirport: null,
+  flyOutOfAirport: null,
   tripStyle: null,
+  theme: null,
   startDate: null,
   endDate: null,
   dateFlexibility: "UNKNOWN",
@@ -105,6 +114,7 @@ export const tripDraftSchema = z.object({
   details: tripDetailsSchema,
   preferences: z.array(preferenceInputSchema).max(40),
   candidateDestinations: z.array(candidateDestinationSchema).max(12),
+  stops: z.array(stopInputSchema).max(MAX_STOPS),
 });
 export type TripDraft = z.infer<typeof tripDraftSchema>;
 
@@ -112,10 +122,24 @@ export const EMPTY_DRAFT: TripDraft = {
   details: EMPTY_TRIP_DETAILS,
   preferences: [],
   candidateDestinations: [],
+  stops: [],
 };
 
+/** Reads a stored draft. Drafts saved before a field existed get that field's empty value. */
 export function parseDraft(value: unknown): TripDraft {
-  const parsed = tripDraftSchema.safeParse(value);
+  const stored =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+  const details =
+    stored.details && typeof stored.details === "object" ? stored.details : {};
+  const parsed = tripDraftSchema.safeParse({
+    preferences: [],
+    candidateDestinations: [],
+    stops: [],
+    ...stored,
+    details: { ...EMPTY_TRIP_DETAILS, ...details },
+  });
   return parsed.success ? parsed.data : EMPTY_DRAFT;
 }
 
@@ -229,7 +253,7 @@ export function mergePreferences(
  */
 export function isEstablishable(draft: TripDraft): boolean {
   const d = draft.details;
-  if (d.destination) return true;
+  if (d.destination || draft.stops.length > 0) return true;
   const hasWhere =
     draft.candidateDestinations.length > 0 || Boolean(d.tripStyle);
   const hasAnchor =
@@ -248,6 +272,11 @@ export function deriveTitle(
   const d = draft.details;
   if (d.title) return d.title;
   if (d.destination) return `${d.destination} trip`;
+  if (draft.stops.length > 0)
+    return `${draft.stops
+      .slice(0, 2)
+      .map((stop) => stop.name)
+      .join(" and ")} trip`;
   const names = draft.candidateDestinations.map((candidate) => candidate.name);
   if (names.length === 1) return `${names[0]} trip`;
   if (names.length > 1) return `${names.slice(0, 2).join(" or ")}?`;

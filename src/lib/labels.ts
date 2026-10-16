@@ -20,6 +20,7 @@ import type {
   TaskStatus,
   TripStage,
   TripStartMode,
+  TripTheme,
 } from "@/generated/prisma/enums";
 
 export const TRIP_STAGE_LABELS: Record<TripStage, string> = {
@@ -35,6 +36,16 @@ export const START_MODE_LABELS: Record<TripStartMode, string> = {
   VIBE: "Vibe first",
   DISCOVER: "Open to ideas",
   MANUAL: "Started manually",
+};
+
+export const TRIP_THEME_LABELS: Record<TripTheme, string> = {
+  SKI: "Ski trip",
+  BEACH: "Beach trip",
+  OUTDOORS: "Outdoors and hiking",
+  CITY: "City break",
+  FOOD: "Food and drink",
+  EVENT: "Event or festival",
+  NONE: "No particular theme",
 };
 
 export const DATE_FLEXIBILITY_LABELS: Record<DateFlexibility, string> = {
