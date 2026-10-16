@@ -11,10 +11,11 @@ import {
 import {
   TEST_DATA_NOTICE,
   bookElsewhereUrl,
-  describeSlice,
+  describeOffer,
   flightTitle,
   localClock,
   localDate,
+  pendingReturnNote,
   travelersLabel,
   type FlightAirport,
   type FlightOffer,
@@ -31,6 +32,39 @@ import {
   type FlightSearchResult,
 } from "@/server/flights";
 
+function notConfigured() {
+  const status = getFlightSearchStatus();
+  return new DomainError(
+    "UNAVAILABLE",
+    `Flight search is not configured. ${status.configured ? "" : status.reason}`.trim(),
+  );
+}
+
+/** Turns a provider failure into a message that is safe to show. Nothing is ever written. */
+function providerFailure(provider: FlightSearchProvider, error: unknown) {
+  if (error instanceof FlightProviderError) {
+    const userError =
+      error.kind === "invalid_request" || error.kind === "unknown_place";
+    if (!userError) {
+      console.error(`[flights] ${provider.id} search failed: ${error.kind}`);
+    }
+    return new DomainError(
+      userError ? "VALIDATION" : "UNAVAILABLE",
+      userError
+        ? error.message
+        : `${error.message} Nothing in the trip was changed.`,
+    );
+  }
+  console.error(
+    `[flights] ${provider.id} search failed:`,
+    error instanceof Error ? error.message : "unknown",
+  );
+  return new DomainError(
+    "UNAVAILABLE",
+    "Flight search failed. Nothing in the trip was changed. Try again in a moment.",
+  );
+}
+
 /**
  * Runs a flight search. The caller has already checked trip membership. Nothing is written:
  * a failed or successful search leaves trip data unchanged.
@@ -40,13 +74,7 @@ export async function searchFlights(
   query: FlightSearchQuery,
   options: { signal?: AbortSignal; now?: Date } = {},
 ): Promise<FlightSearchResult> {
-  if (!provider) {
-    const status = getFlightSearchStatus();
-    throw new DomainError(
-      "UNAVAILABLE",
-      `Flight search is not configured. ${status.configured ? "" : status.reason}`.trim(),
-    );
-  }
+  if (!provider) throw notConfigured();
   if (query.departureDate < todayDateOnly(options.now)) {
     throw invalid("Pick a departure date from today onward.", {
       departureDate: ["Pick a date from today onward"],
@@ -55,25 +83,29 @@ export async function searchFlights(
   try {
     return await provider.search(query, options.signal);
   } catch (error) {
-    if (error instanceof FlightProviderError) {
-      if (error.kind !== "invalid_request" && error.kind !== "unknown_place") {
-        console.error(`[flights] ${provider.id} search failed: ${error.kind}`);
-      }
-      throw new DomainError(
-        error.kind === "invalid_request" || error.kind === "unknown_place"
-          ? "VALIDATION"
-          : "UNAVAILABLE",
-        error.message,
-      );
-    }
-    console.error(
-      `[flights] ${provider.id} search failed:`,
-      error instanceof Error ? error.message : "unknown",
+    throw providerFailure(provider, error);
+  }
+}
+
+/**
+ * Loads return options for a round trip whose return flight is not chosen yet. This spends a
+ * provider search, so it runs only when someone asks for it. Nothing is written.
+ */
+export async function searchReturnFlights(
+  provider: FlightSearchProvider | null,
+  offer: FlightOffer,
+  options: { signal?: AbortSignal } = {},
+): Promise<FlightSearchResult> {
+  if (!provider) throw notConfigured();
+  if (!offer.pendingReturn || !provider.searchReturns) {
+    throw invalid(
+      "This flight already includes its return, or the flight source can't load returns.",
     );
-    throw new DomainError(
-      "UNAVAILABLE",
-      "Flight search failed. Nothing in the trip was changed. Try again in a moment.",
-    );
+  }
+  try {
+    return await provider.searchReturns(offer, options.signal);
+  } catch (error) {
+    throw providerFailure(provider, error);
   }
 }
 
@@ -123,7 +155,7 @@ export async function saveFlightOffer(
   if (!outbound) throw invalid("That flight has no itinerary to save.");
   const last = offer.slices[offer.slices.length - 1]!;
   const title = flightTitle(offer).slice(0, 160);
-  const url = linkFor(offer);
+  const url = offer.bookingUrl ?? linkFor(offer);
   const testLabel = offer.testMode ? ` (${TEST_DATA_NOTICE})` : "";
 
   return db.$transaction(async (tx) => {
@@ -142,10 +174,7 @@ export async function saveFlightOffer(
           tripId: access.tripId,
           category: "FLIGHT",
           title,
-          description: offer.slices
-            .map(describeSlice)
-            .join("\n")
-            .slice(0, 2000),
+          description: describeOffer(offer).join("\n").slice(0, 2000),
           url,
           sourceName: offer.sourceName,
           origin: "RESEARCH_PROVIDER",
@@ -153,18 +182,20 @@ export async function saveFlightOffer(
           priceAmount: offer.totalAmount,
           priceCurrency: offer.totalCurrency,
           priceUnit: null,
-          priceNote: `Total for ${travelersLabel(offer.passengers)}. ${
+          priceNote: `${offer.pendingReturn ? "Round-trip total" : "Total"} for ${travelersLabel(offer.passengers)}. ${
             offer.testMode
               ? TEST_DATA_NOTICE
-              : "Fare as quoted at retrieval; it can change before booking"
+              : `Price as ${offer.sourceName} showed it at retrieval; it can change before booking`
           }`,
           locationName:
             outbound.destination.cityName ?? outbound.destination.iataCode,
           retrievedAt: new Date(offer.retrievedAt),
           providerPayload: {
-            provider: "duffel",
+            provider: offer.providerId ?? "duffel",
             offerId: offer.offerId,
             testMode: offer.testMode,
+            returnDate: offer.pendingReturn?.date ?? null,
+            returnChosen: !offer.pendingReturn,
             expiresAt: offer.expiresAt,
             cabin: offer.cabin,
             passengers: offer.passengers,
@@ -211,7 +242,8 @@ export async function saveFlightOffer(
 
     const notes = [
       offer.testMode ? `${TEST_DATA_NOTICE}.` : null,
-      `Price is the total for ${travelersLabel(offer.passengers)} as quoted by ${offer.sourceName} on ${offer.retrievedAt.slice(0, 16).replace("T", " ")} UTC. Add the other travelers to split it.`,
+      `Price is the ${offer.pendingReturn ? "round-trip " : ""}total for ${travelersLabel(offer.passengers)} as quoted by ${offer.sourceName} on ${offer.retrievedAt.slice(0, 16).replace("T", " ")} UTC. Add the other travelers to split it.`,
+      offer.pendingReturn ? pendingReturnNote(offer.pendingReturn) : null,
       "Not booked. Book with the airline or a travel site, then update this record.",
     ]
       .filter(Boolean)

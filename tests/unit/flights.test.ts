@@ -268,7 +268,7 @@ describe("Duffel provider", () => {
 describe("flight search configuration", () => {
   const saved = { ...process.env };
   beforeEach(() => {
-    delete process.env.FLIGHT_PROVIDER;
+    process.env.FLIGHT_PROVIDER = "duffel";
     delete process.env.DUFFEL_ACCESS_TOKEN;
   });
   afterEach(() => {
@@ -340,7 +340,8 @@ describe("searchFlights service", () => {
     expect(error).toBeInstanceOf(DomainError);
     expect(error).toMatchObject({
       code: "UNAVAILABLE",
-      message: "Duffel is getting too many searches right now.",
+      message:
+        "Duffel is getting too many searches right now. Nothing in the trip was changed.",
     });
   });
 });

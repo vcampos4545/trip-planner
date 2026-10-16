@@ -303,6 +303,7 @@ export class DuffelFlightProvider implements FlightSearchProvider {
       expiresAt: offer.expires_at ?? null,
       retrievedAt: context.retrievedAt,
       sourceName: context.testMode ? "Duffel (test data)" : "Duffel",
+      providerId: "duffel",
       testMode: context.testMode || offer.live_mode === false,
     };
   }
