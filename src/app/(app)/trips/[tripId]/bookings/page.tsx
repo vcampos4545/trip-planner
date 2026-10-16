@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { BookingsView } from "@/components/bookings/bookings-view";
 import { BudgetSummaryCard } from "@/components/bookings/budget-summary";
 import { FlightSearchPanel } from "@/components/flights/flight-search-panel";
+import { StaySearchPanel } from "@/components/stays/stay-search-panel";
 import { emptyBooking } from "@/lib/validation/form-defaults";
 import { PageHeader } from "@/components/shared/page-header";
 import type { BookingCategory, OptionCategory } from "@/generated/prisma/enums";
@@ -11,6 +12,7 @@ import { summarizeBudget } from "@/lib/domain/budget";
 import { serialize } from "@/lib/serialize";
 import type { BookingFormInput } from "@/lib/validation/booking";
 import { flightSearchDefaults } from "@/lib/validation/flights";
+import { staySearchDefaults, staySearchPlaces } from "@/lib/validation/stays";
 import { requireTripAccess } from "@/server/access";
 import { requireUser } from "@/server/auth/session";
 import { db } from "@/server/db";
@@ -18,6 +20,8 @@ import { getFlightSearchStatus } from "@/server/flights";
 import { orNotFound } from "@/server/not-found";
 import { listBookings } from "@/server/services/bookings";
 import { listMembers } from "@/server/services/members";
+import { listStops } from "@/server/services/stops";
+import { getStaySearchStatus } from "@/server/stays";
 
 export const metadata: Metadata = { title: "Bookings" };
 
@@ -39,7 +43,7 @@ export default async function BookingsPage({
   const query = await searchParams;
   const user = await requireUser(`/trips/${tripId}/bookings`);
   const access = await orNotFound(requireTripAccess(tripId, user.id));
-  const [bookings, members, trip, options] = await Promise.all([
+  const [bookings, members, trip, options, stops] = await Promise.all([
     listBookings(access),
     listMembers(access),
     db.trip.findUniqueOrThrow({
@@ -73,6 +77,7 @@ export default async function BookingsPage({
       },
       take: 100,
     }),
+    listStops(access),
   ]);
 
   let prefill: BookingFormInput | null = null;
@@ -101,6 +106,9 @@ export default async function BookingsPage({
 
   const editId = typeof query.edit === "string" ? query.edit : null;
   const flights = getFlightSearchStatus();
+  const stays = getStaySearchStatus();
+  const today = todayDateOnly();
+  const stayPlaces = staySearchPlaces(trip, stops, today);
 
   const budget = summarizeBudget(
     bookings,
@@ -159,7 +167,29 @@ export default async function BookingsPage({
                   }
                 : { configured: false, reason: flights.reason }
             }
-            defaults={flightSearchDefaults(trip, todayDateOnly())}
+            defaults={flightSearchDefaults(trip, today)}
+          />
+        }
+        staySearch={
+          <StaySearchPanel
+            tripId={tripId}
+            status={
+              stays.configured
+                ? {
+                    configured: true,
+                    label: stays.label,
+                    supportsVacationRentals: stays.supportsVacationRentals,
+                  }
+                : { configured: false, reason: stays.reason }
+            }
+            defaults={staySearchDefaults(stayPlaces, trip.groupSize)}
+            places={stayPlaces}
+            members={members.map((member) => ({
+              id: member.id,
+              name: member.user.name ?? member.user.email ?? "Member",
+            }))}
+            currentMemberId={access.memberId}
+            currency={trip.currency}
           />
         }
       />

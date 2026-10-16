@@ -1,6 +1,7 @@
 import type { TripStartMode } from "@/generated/prisma/enums";
 import { APP_NAME, ASSISTANT_NAME } from "@/config/brand";
 import { describeMatch, type ShownFlight } from "@/lib/domain/flight-match";
+import { describeShownStay, type ShownStay } from "@/lib/domain/stay-match";
 import { nextTopics } from "@/lib/domain/follow-up";
 import { describeStop } from "@/lib/domain/stops";
 import {
@@ -62,6 +63,7 @@ const INVITE_RULES = `Inviting people:
 const BOOKING_RULES = `Bookings the user made:
 - When the user says they bought or booked something, or that it is arranged (a flight, a stay, a friend driving them between stops), record it with record_booking in the same turn, for them or for the trip member they name. Their word is enough; never ask anyone else to confirm it.
 - For a flight from results shown earlier, fill fromShownFlight with what the user said (airline, times, date). If record_booking says it is ambiguous, ask which flight they mean. If nothing matches, ask for the details.
+- For a stay from results shown earlier, fill fromShownStay with its resultId or name. For any other stay the user booked (a hotel, an Airbnb, a friend's place), record an ACCOMMODATION booking with the place as title, the site or host as provider, check-in and check-out as start and end dates, and the town or address in locationName and address.
 - Say it is recorded in Bookings and that they can edit or undo it below your reply. Never say a booking is confirmed with the airline or provider.
 - Ground legs between places (a friend driving, a shuttle, a rental car) are GROUND_TRANSPORT bookings with the trip members riding along, and the driver or company as provider.`;
 
@@ -73,6 +75,19 @@ const FLIGHT_RULES = {
   live: (source: string) =>
     `For flights use search_flights. Its results come from ${source}. When you mention them, name that source and the retrieval time, and say prices can change before booking. Answer about flights only from its results in this turn or the flights shown earlier (listed below). Each search spends a limited monthly quota: call search_flights only when the user asks for flights or flight prices, and never to fill in a reply. For a round trip the results show the outbound flight with the round-trip total; call search_return_flights only when the user asks for the return options of a specific result. Price insights are Google's estimate for the route; call them Google's. To book, point people to the Google Flights link. This app does not book flights; never claim it booked or reserved one. When the user says they bought a flight, record it with record_booking.`,
 } as const;
+
+const STAY_RULES = {
+  off: () =>
+    "Stay search is not configured. If asked about hotels or rentals, say live stay search is not set up, do not quote places, prices, or availability, and point to adding a place from its link in Bookings > Accommodations.",
+  hotels_only: (source: string) =>
+    `For places to stay use search_stays. It searches hotels only through ${source}; it cannot search vacation rentals, so say so when asked for one and offer adding a rental from its link in Bookings > Accommodations. ${stayCommonRules(source)}`,
+  live: (source: string) =>
+    `For places to stay use search_stays, with kind vacation_rental for houses, condos, cabins, or a number of bedrooms. ${stayCommonRules(source)}`,
+} as const;
+
+function stayCommonRules(source: string) {
+  return `Results come from ${source}. When you mention them, name that source and the retrieval time, give the nightly and total price exactly as returned, and say prices can change before booking. Answer about stays only from search_stays results in this turn or the stays shown earlier (listed below). Searches share the flight search quota: call search_stays only when the user asks for places to stay or their prices. Google Hotels prices for the number of guests and has no room filter, so remind the user to check rooms or beds before booking. It does not search Airbnb; people add Airbnb, Vrbo, or other listings from their link in Bookings > Accommodations. To save a shown stay use save_stay_option (asConsidering when they want it in Bookings). To book, point people to the result's link. This app does not book stays; never claim it booked or reserved one. When the user says they booked a stay, record it with record_booking.`;
+}
 
 export function buildInstructions(params: {
   phase: "draft" | "trip";
@@ -92,6 +107,12 @@ export function buildInstructions(params: {
   soloTrip?: boolean;
   /** Flight results shown earlier in this conversation, most recent last. */
   shownFlights?: ShownFlight[];
+  /** "hotels_only" when the stay provider can't search vacation rentals. */
+  staySearch?: "off" | "hotels_only" | "live";
+  /** Where stay results come from, such as "Google Hotels via SerpApi". */
+  staySource?: string;
+  /** Stay results shown earlier in this conversation, most recent last. */
+  shownStays?: ShownStay[];
   /** True when the theme's usual tasks are not on the trip yet. */
   themeTasksPending?: boolean;
 }) {
@@ -105,6 +126,8 @@ export function buildInstructions(params: {
     candidateDestinations: params.draft.candidateDestinations,
   });
   const shown = (params.shownFlights ?? []).slice(-12);
+  const shownStays = (params.shownStays ?? []).slice(-12);
+  const staySearch = params.staySearch ?? "off";
   const lines = [
     `You are ${ASSISTANT_NAME}, the trip-planning assistant inside ${APP_NAME}, a workspace where groups plan trips together.`,
     `Today is ${params.today}. You are talking with ${params.userName ?? "a trip member"}.`,
@@ -125,6 +148,12 @@ export function buildInstructions(params: {
       : null,
     params.phase === "trip" && shown.length > 0
       ? `Flights shown earlier in this conversation (resultId: details). Prices were as shown then and may have changed. Use them to record a flight the user says they bought:\n${shown.map((item) => `- ${item.resultId}: ${describeMatch({ resultId: item.resultId, offer: item.offer, slices: item.offer.slices, leg: item.offer.slices.length > 1 ? "round trip" : item.offer.pendingReturn ? "outbound" : "one way" })}; ${item.offer.totalAmount} ${item.offer.totalCurrency} total for ${item.offer.passengers} (${item.offer.sourceName})`).join("\n")}`
+      : null,
+    params.phase === "trip"
+      ? STAY_RULES[staySearch](params.staySource ?? "the stay provider")
+      : null,
+    params.phase === "trip" && shownStays.length > 0
+      ? `Stays shown earlier in this conversation (resultId: details). Prices were as shown then and may have changed. Use them to save a stay or record one the user says they booked:\n${shownStays.map((item) => `- ${item.resultId}: ${describeShownStay(item)} (${item.offer.sourceName}, retrieved ${item.offer.retrievedAt.slice(0, 16)} UTC)`).join("\n")}`
       : null,
     params.phase === "trip" ? BOOKING_RULES : null,
     params.phase === "trip" ? INVITE_RULES : null,

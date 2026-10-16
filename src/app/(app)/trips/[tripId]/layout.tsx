@@ -25,6 +25,7 @@ import { inviteDefaultTtlDays } from "@/server/config";
 import { db } from "@/server/db";
 import { getEmailStatus } from "@/server/email";
 import { getFlightSearchStatus } from "@/server/flights";
+import { getStaySearchStatus } from "@/server/stays";
 import { orNotFound } from "@/server/not-found";
 import { getResearchProvider } from "@/server/research";
 import {
@@ -90,6 +91,7 @@ export default async function TripLayout({
   const ai = getAiStatus();
   const research = getResearchProvider();
   const flights = getFlightSearchStatus();
+  const stays = getStaySearchStatus();
   const solo = trip.members.length === 1;
   const details = tripToDetails(trip);
   const dates =
@@ -142,6 +144,11 @@ export default async function TripLayout({
                     label: flights.label,
                     testMode: flights.testMode,
                   }
+                : { configured: false }
+            }
+            stays={
+              stays.configured
+                ? { configured: true, label: stays.label }
                 : { configured: false }
             }
           />
