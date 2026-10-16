@@ -24,6 +24,11 @@ function effectsOf(metadata: unknown): ChatEffect[] {
       ok: Boolean(effect.ok),
       kind: String(effect.kind),
       summary: String(effect.summary),
+      ...(typeof effect.entityId === "string" &&
+      (effect.entityType === "booking" || effect.entityType === "proposal")
+        ? { entityId: effect.entityId, entityType: effect.entityType }
+        : {}),
+      ...(effect.undo === "delete_booking" ? { undo: effect.undo } : {}),
     }));
 }
 

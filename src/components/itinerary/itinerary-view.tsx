@@ -18,10 +18,9 @@ import {
   Utensils,
   X,
 } from "lucide-react";
-import type { Route } from "next";
-import Link from "next/link";
 import { useState } from "react";
 
+import { useAtlasPanel } from "@/components/atlas/atlas-panel";
 import { ConfirmAction } from "@/components/shared/confirm-button";
 import { EventStatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
@@ -275,17 +274,18 @@ export function ItineraryView({
   );
 }
 
-function AskAtlasLink({ tripId, prompt }: { tripId: string; prompt: string }) {
+function AskAtlasLink({ prompt }: { tripId: string; prompt: string }) {
+  const atlas = useAtlasPanel();
+  if (!atlas) return null;
   return (
-    <Link
-      href={
-        `/trips/${tripId}/plan?prompt=${encodeURIComponent(prompt)}` as Route
-      }
+    <button
+      type="button"
+      onClick={() => atlas.openAtlas(prompt)}
       className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
     >
       <Sparkles className="size-3" aria-hidden />
       Ask {ASSISTANT_NAME} for ideas
-    </Link>
+    </button>
   );
 }
 
