@@ -69,7 +69,8 @@ test("Flow A: a new user creates a trip by describing it to Atlas and can come b
   // 7. Leave and return: everything is still there.
   await page.goto("/trips");
   await page.getByRole("link", { name: "Lisbon trip" }).click();
-  await expect(page.getByText("Lisbon (tentative)").first()).toBeVisible();
+  await page.waitForURL(new RegExp(`/trips/${tripId}$`));
+  await expect(page.getByTestId("trip-route")).toHaveText("Lisbon (tentative)");
   await page.reload();
   await page.getByRole("button", { name: "Ask Atlas", exact: true }).click();
   const panel = page.getByRole("dialog", { name: "Atlas" });
