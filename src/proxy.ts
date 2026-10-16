@@ -3,7 +3,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE_NAMES } from "@/server/auth/cookies";
 
 /**
- * Optimistic redirect for signed-out visitors. This only checks that a session cookie exists.
+ * Optimistic redirect for signed-out visitors. Invite pages are not covered: they show a safe
+ * preview and a sign-in button to signed-out visitors. This only checks that a session cookie exists.
  * Real authentication and trip authorization happen on the server for every page and action.
  */
 export function proxy(request: NextRequest) {
@@ -21,5 +22,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/trips/:path*", "/invite/:path*"],
+  matcher: ["/trips/:path*"],
 };

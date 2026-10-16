@@ -49,6 +49,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return session;
     },
   },
+  events: {
+    // Auth.js leaves emailVerified empty for OAuth users. Google says whether it verified the
+    // address, and email-bound trip invitations rely on that.
+    async signIn({ user, profile, account }) {
+      if (account?.provider !== "google" || !user.id || !user.email) return;
+      if (profile?.email_verified !== true) return;
+      if (
+        typeof profile.email !== "string" ||
+        profile.email.toLowerCase() !== user.email.toLowerCase()
+      )
+        return;
+      await db.user.updateMany({
+        where: { id: user.id, emailVerified: null },
+        data: { emailVerified: new Date() },
+      });
+    },
+  },
 });
 
 export function isGoogleAuthConfigured() {

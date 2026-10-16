@@ -6,7 +6,7 @@ import { AvatarStack } from "@/components/user-avatar";
 import { Pill, StageBadge } from "@/components/shared/status-badge";
 import type { TripStage } from "@/generated/prisma/enums";
 import { formatDateRange } from "@/lib/dates";
-import type { NextAction } from "@/lib/domain/next-action";
+import { nextActionHref, type NextAction } from "@/lib/domain/next-action";
 
 export type TripCardData = {
   id: string;
@@ -32,11 +32,7 @@ export function TripCard({ trip }: { trip: TripCardData }) {
     formatDateRange(trip.startDate, trip.endDate) ??
     trip.dateNotes ??
     "Dates not set";
-  const href = (
-    trip.nextAction.tab === "overview"
-      ? `/trips/${trip.id}`
-      : `/trips/${trip.id}/${trip.nextAction.tab}`
-  ) as Route;
+  const href = nextActionHref(trip.id, trip.nextAction) as Route;
   return (
     <article className="group relative flex flex-col rounded-xl border bg-card p-5 transition-shadow focus-within:ring-3 focus-within:ring-ring/40 hover:shadow-sm">
       <div className="flex items-start justify-between gap-3">

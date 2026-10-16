@@ -29,6 +29,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TripStage } from "@/generated/prisma/enums";
 import { useAction } from "@/hooks/use-action";
+import {
+  LEAVE_BLOCK_MESSAGES,
+  type LeaveBlock,
+} from "@/lib/domain/invitations";
 import { TRIP_STAGE_LABELS } from "@/lib/labels";
 import { leaveTripAction } from "@/server/actions/members";
 import { deleteTripAction, setTripStageAction } from "@/server/actions/trips";
@@ -38,11 +42,14 @@ export function TripMenu({
   title,
   stage,
   isOrganizer,
+  leaveBlock,
 }: {
   tripId: string;
   title: string;
   stage: TripStage;
   isOrganizer: boolean;
+  /** Why the viewer can't leave right now, shown instead of the action. */
+  leaveBlock: LeaveBlock | null;
 }) {
   const { run, pending } = useAction();
   const [confirm, setConfirm] = useState<"delete" | "leave" | null>(null);
@@ -59,7 +66,7 @@ export function TripMenu({
             <MoreHorizontal aria-hidden />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent align="end" className="w-64">
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
               <Flag aria-hidden />
@@ -84,10 +91,22 @@ export function TripMenu({
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setConfirm("leave")}>
-            <DoorOpen aria-hidden />
-            Leave trip
-          </DropdownMenuItem>
+          {leaveBlock ? (
+            <DropdownMenuItem disabled className="flex-col items-start gap-0.5">
+              <span className="flex items-center gap-2">
+                <DoorOpen aria-hidden />
+                Leave trip
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {LEAVE_BLOCK_MESSAGES[leaveBlock]}
+              </span>
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onSelect={() => setConfirm("leave")}>
+              <DoorOpen aria-hidden />
+              Leave trip
+            </DropdownMenuItem>
+          )}
           {isOrganizer ? (
             <DropdownMenuItem
               variant="destructive"

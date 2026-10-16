@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Prisma } from "@/generated/prisma/client";
 import type { TripStage, TripStartMode } from "@/generated/prisma/enums";
 import { parseDateOnly, toDateOnly } from "@/lib/dates";
+import { canInvite } from "@/lib/domain/invitations";
 import type { TripProgress } from "@/lib/domain/next-action";
 import {
   applyStopOps,
@@ -117,6 +118,7 @@ export async function getTripProgress(
         durationDays: true,
         lodgingStatus: true,
         flightsStatus: true,
+        membersCanInvite: true,
       },
     }),
     db.tripMember.count({ where: { tripId } }),
@@ -171,6 +173,7 @@ export async function getTripProgress(
     hasDates: Boolean(trip.startDate),
     hasTimingNotes: Boolean(trip.dateNotes || trip.durationDays),
     memberCount,
+    canInvite: canInvite(access.role, trip.membersCanInvite),
     pendingProposals,
     suggestedTasks,
     suggestedEvents,

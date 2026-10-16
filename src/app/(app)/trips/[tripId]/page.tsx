@@ -13,12 +13,12 @@ import { nextAction } from "@/lib/domain/next-action";
 import { formatMoney } from "@/lib/money";
 import { summarizeBudget } from "@/lib/domain/budget";
 import { requireUser } from "@/server/auth/session";
-import { inviteDefaultTtlDays } from "@/server/config";
 import { db } from "@/server/db";
 import { orNotFound } from "@/server/not-found";
 import { listRecentActivity } from "@/server/services/activity";
 import { listStops } from "@/server/services/stops";
-import { listInvitations, listMembers } from "@/server/services/members";
+import { listInvitations } from "@/server/services/invitations";
+import { leaveStatus, listMembers } from "@/server/services/members";
 import {
   getTripDetails,
   getTripProgress,
@@ -48,6 +48,7 @@ export default async function TripOverviewPage({
     bookings,
     candidates,
     stops,
+    leaveBlock,
   ] = await Promise.all([
     getTripDetails(access),
     getTripProgress(access),
@@ -98,6 +99,7 @@ export default async function TripOverviewPage({
       take: 8,
     }),
     listStops(access),
+    leaveStatus(access),
   ]);
 
   const budget = summarizeBudget(
@@ -282,18 +284,15 @@ export default async function TripOverviewPage({
           tripId={tripId}
           currentUserId={user.id}
           isOrganizer={access.isOrganizer}
-          defaultTtlDays={inviteDefaultTtlDays()}
+          leaveBlock={leaveBlock}
+          pendingInvites={
+            invitations.emails.filter((invite) => invite.status === "pending")
+              .length
+          }
           members={members.map((member) => ({
             id: member.id,
             role: member.role,
             user: member.user,
-          }))}
-          invitations={invitations.map((invite) => ({
-            id: invite.id,
-            expiresAt: invite.expiresAt.toISOString(),
-            maxUses: invite.maxUses,
-            useCount: invite.useCount,
-            createdAt: invite.createdAt.toISOString(),
           }))}
         />
         <section
