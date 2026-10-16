@@ -38,7 +38,9 @@ import {
   MAX_FLIGHT_PASSENGERS,
   TEST_DATA_NOTICE,
   bookElsewhereUrl,
-  describeSlice,
+  describeOffer,
+  isRoundTrip,
+  placeCodes,
   type FlightOffer,
 } from "@/lib/flights";
 import { flightSearchFormSchema } from "@/lib/validation/flights";
@@ -52,8 +54,15 @@ import {
   type ResearchProvider,
   type ResearchResult,
 } from "@/server/research";
-import type { FlightSearchProvider } from "@/server/flights";
-import { saveFlightOffer, searchFlights } from "@/server/services/flights";
+import type {
+  FlightSearchProvider,
+  FlightSearchResult,
+} from "@/server/flights";
+import {
+  saveFlightOffer,
+  searchFlights,
+  searchReturnFlights,
+} from "@/server/services/flights";
 import { describeFields, tripToDetails } from "@/server/services/trip-mapping";
 import { applyAtlasPatch, describeChange } from "@/server/services/trips";
 import { createOption, listOptions } from "@/server/services/research";
@@ -886,20 +895,62 @@ const listSavedOptions = defineTool({
 // Flights
 // ---------------------------------------------------------------------------
 
+/** Keeps offers for save_flight_option and search_return_flights, and shapes the tool output. */
+function flightToolOutput(context: TripContext, result: FlightSearchResult) {
+  const listed = result.offers.slice(0, 6).map((offer, index) => {
+    const id = `f${context.flightResults.size + index + 1}`;
+    context.flightResults.set(id, offer);
+    return {
+      resultId: id,
+      airline: offer.airline.name,
+      totalPrice: `${offer.totalAmount} ${offer.totalCurrency} ${isRoundTrip(offer) ? "round-trip " : ""}total for ${offer.passengers}`,
+      slices: describeOffer(offer),
+      returnNotLoaded: Boolean(offer.pendingReturn),
+      link: offer.bookingUrl ?? null,
+    };
+  });
+  return {
+    available: true,
+    testData: result.testMode,
+    dataNotice: result.testMode
+      ? `${TEST_DATA_NOTICE}. These come from Duffel's test environment and may use real airline names, but they are samples. Tell the user plainly that they are test data and not real flights, fares, or availability.`
+      : `Prices are as ${result.sourceName} showed them at retrieval and can change before booking. This app does not book flights.`,
+    source: result.sourceName,
+    retrievedAt: result.retrievedAt,
+    reusedEarlierSearch: result.cached ?? false,
+    priceInsights: result.priceInsights
+      ? {
+          ...result.priceInsights,
+          note: "Google's own estimate for this route, not a fare.",
+        }
+      : null,
+    search: result.search,
+    bookElsewhere:
+      listed.find((item) => item.link)?.link ??
+      bookElsewhereUrl({
+        origin: result.search.origin.iataCode,
+        destination: result.search.destination.iataCode,
+        departureDate: result.search.departureDate,
+        returnDate: result.search.returnDate,
+      }),
+    results: listed,
+  };
+}
+
 const searchFlightsTool = defineTool({
   name: "search_flights",
   description:
-    "Search flights with the configured flight provider. Returns priced offers with airline, local times, stops, duration, total price and currency, source, and retrieval time, or says flight search is unavailable. Only state flight details that this tool returned.",
+    "Search flights with the configured flight provider. Call it only when the user wants flights or flight prices. Returns priced offers with airline, local times, stops, duration, total price and currency, source, retrieval time, and any price insights, or says flight search is unavailable. Only state flight details that this tool returned.",
   args: z.object({
     origin: z
       .string()
       .describe(
-        "Departure airport or city: an IATA code like JFK, or a city name.",
+        "Departure airport or city: an IATA code like JFK (preferred, it saves a lookup), or a city name.",
       ),
     destination: z
       .string()
       .describe(
-        "Arrival airport or city: an IATA code like LIS, or a city name.",
+        "Arrival airport or city: an IATA code like LIS (preferred, it saves a lookup), or a city name.",
       ),
     departureDate: z.string().regex(DATE_PATTERN).describe("YYYY-MM-DD."),
     returnDate: z
@@ -963,41 +1014,46 @@ const searchFlightsTool = defineTool({
       );
     }
     const result = await searchFlights(context.flights, parsed.data);
-    const listed = result.offers.slice(0, 6).map((offer, index) => {
-      const id = `f${context.flightResults.size + index + 1}`;
-      context.flightResults.set(id, offer);
-      return {
-        resultId: id,
-        airline: offer.airline.name,
-        totalPrice: `${offer.totalAmount} ${offer.totalCurrency} total for ${offer.passengers}`,
-        slices: offer.slices.map(describeSlice),
-      };
-    });
-    const route = `${result.search.origin.iataCode} to ${result.search.destination.iataCode}`;
+    const output = flightToolOutput(context, result);
+    const route = `${placeCodes(result.search.origin)} to ${placeCodes(result.search.destination)}`;
     context.effects.push({
       tool: this.name,
       ok: true,
       kind: "searched",
-      summary: `Searched ${result.sourceName} for flights ${route} (${listed.length} results)${result.testMode ? `. ${TEST_DATA_NOTICE}` : ""}`,
+      summary: `Searched ${result.sourceName} for flights ${route} (${output.results.length} results${result.cached ? ", reused from an earlier search" : ""})${result.testMode ? `. ${TEST_DATA_NOTICE}` : ""}`,
       testData: result.testMode,
     });
-    return {
-      available: true,
+    return output;
+  },
+});
+
+const searchReturnFlightsTool = defineTool({
+  name: "search_return_flights",
+  description:
+    "Load return flight options for one round-trip result from search_flights (same turn) whose return is not loaded yet (returnNotLoaded: true). Each call spends a search from a limited quota, so call it only when the user asks for return flights for that result. Returns round-trip offers with both legs.",
+  args: z.object({
+    resultId: z.string().describe("resultId from search_flights."),
+  }),
+  phases: ["trip"],
+  async run(context, args) {
+    if (context.phase !== "trip") return {};
+    const offer = context.flightResults.get(args.resultId);
+    if (!offer) {
+      throw new DomainError(
+        "VALIDATION",
+        `Unknown resultId "${args.resultId}". Search flights first.`,
+      );
+    }
+    const result = await searchReturnFlights(context.flights, offer);
+    const output = flightToolOutput(context, result);
+    context.effects.push({
+      tool: this.name,
+      ok: true,
+      kind: "searched",
+      summary: `Loaded return flights from ${result.sourceName} (${output.results.length} results${result.cached ? ", reused from an earlier search" : ""})`,
       testData: result.testMode,
-      dataNotice: result.testMode
-        ? `${TEST_DATA_NOTICE}. These come from Duffel's test environment and may use real airline names, but they are samples. Tell the user plainly that they are test data and not real flights, fares, or availability.`
-        : "Fares can change before booking. This app does not book flights.",
-      source: result.sourceName,
-      retrievedAt: result.retrievedAt,
-      search: result.search,
-      bookElsewhere: bookElsewhereUrl({
-        origin: result.search.origin.iataCode,
-        destination: result.search.destination.iataCode,
-        departureDate: result.search.departureDate,
-        returnDate: result.search.returnDate,
-      }),
-      results: listed,
-    };
+    });
+    return output;
   },
 });
 
@@ -1152,6 +1208,7 @@ const ALL_TOOLS: AtlasTool<any>[] = [
   saveOption,
   listSavedOptions,
   searchFlightsTool,
+  searchReturnFlightsTool,
   saveFlightTool,
   suggestTaskTool,
   proposeEventTool,

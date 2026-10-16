@@ -47,7 +47,7 @@ test("Flow G: flight search shows labelled Duffel test data, saves with provenan
   const cheapest = results.first();
   await expect(cheapest).toContainText("Duffel Airways");
   await expect(cheapest.getByTestId("flight-price")).toHaveText("$864.20");
-  await expect(cheapest).toContainText("USD total, 2 travelers");
+  await expect(cheapest).toContainText("USD round-trip total, 2 travelers");
   await expect(cheapest).toContainText("Nonstop");
   await expect(cheapest).toContainText("Outbound");
   await expect(cheapest).toContainText("Return");

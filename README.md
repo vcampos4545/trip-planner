@@ -24,7 +24,7 @@ Architecture notes and extension points live in [docs/architecture.md](docs/arch
 - Docker, for the local PostgreSQL container
 - A Google Cloud OAuth client to sign in (instructions below)
 - Optional: an OpenAI API key to turn on Atlas
-- Optional: a Duffel test access token to turn on flight search
+- Optional: a free SerpApi key to turn on flight search (Google Flights results)
 
 ## Local setup
 
@@ -53,8 +53,8 @@ Run these from the repository root.
    Then set `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` (see [Google OAuth](#google-oauth)) and,
    if you want Atlas, `OPENAI_API_KEY` (see [OpenAI](#openai)). For live research, also set
    `RESEARCH_PROVIDER="openai_web"` (see [Live web search](#live-web-search)). For flight search,
-   set `DUFFEL_ACCESS_TOKEN` to a Duffel test token (see [Flight search](#flight-search)). Leave
-   `DATABASE_URL` as it is to use the Docker database.
+   set `SERPAPI_API_KEY` (see [Flight search](#flight-search)). Leave `DATABASE_URL` as it is to
+   use the Docker database.
 
 4. Start PostgreSQL. It listens on port 5433 and creates two databases: `trip_planner` for
    development and `trip_planner_test` for tests.
@@ -186,8 +186,53 @@ https://developers.openai.com/api/docs/pricing for current prices.
 
 ## Flight search
 
-The Options tab has a flight search panel, and Atlas has a `search_flights` tool that uses the same
-service. Both run on [Duffel](https://duffel.com) in test mode.
+The Options tab has a flight search panel, and Atlas has `search_flights` and
+`search_return_flights` tools that use the same service. Two providers are available, picked with
+`FLIGHT_PROVIDER`:
+
+- `serpapi` (default): Google Flights results through [SerpApi](https://serpapi.com).
+- `duffel`: [Duffel](https://duffel.com) in test mode. Sample data only, kept for later live use.
+
+### SerpApi (Google Flights)
+
+1. Register for a free account at https://serpapi.com.
+2. Copy your key from https://serpapi.com/manage-api-key.
+3. Set it in `.env` and restart the app:
+
+   ```bash
+   FLIGHT_PROVIDER="serpapi"
+   SERPAPI_API_KEY="..."
+   ```
+
+The Plan with AI tab then shows "Flight search: Google Flights via SerpApi".
+
+Quota: the free plan allows about 250 searches a month and 50 an hour (check your plan at
+https://serpapi.com/pricing). Paid plans have no pay-as-you-go overage, so when the quota runs out,
+searches fail until it resets. The app spends searches carefully:
+
+- A one-way or round-trip search is one SerpApi search. A round trip comes back as outbound
+  flights priced with Google's round-trip total; the return options for one outbound flight are
+  another search, run only when someone clicks **Show return flights** or asks Atlas for them.
+- A city name such as "New York" is looked up once through Google Flights autocomplete (which may
+  count as a search) and then reused for 30 days. A 3-letter code such as JFK needs no lookup.
+- Identical searches within `SERPAPI_CACHE_HOURS` (default 3) reuse the saved results from the
+  database, so restarts keep them. The panel says when results were reused and shows their
+  original retrieval time. Only successful searches are cached.
+- Atlas is told to search only when the user asks for flights or flight prices.
+
+How it behaves:
+
+- Results are labelled "Google Flights via SerpApi" with their retrieval time. Prices are totals
+  for all travelers in US dollars, exactly as Google Flights showed them, and can change before
+  booking. Google's price insight (whether prices are low, typical, or high, and the usual range)
+  is shown when returned and labelled as Google's estimate.
+- Each result links to the search on Google Flights, where you book. "Any cabin" searches economy,
+  since Google Flights searches one cabin at a time.
+- SerpApi works by reading Google Flights, so it can break or return fewer results when Google
+  changes its pages. Errors, an exhausted quota, and the hourly limit each show a clear message,
+  and a failed search changes no trip data.
+
+### Duffel (test mode)
 
 1. Create a free account at https://app.duffel.com/join.
 2. In the dashboard, make sure the test mode toggle is on, then open **Developers > Access
@@ -199,31 +244,23 @@ service. Both run on [Duffel](https://duffel.com) in test mode.
    DUFFEL_ACCESS_TOKEN="duffel_test_..."
    ```
 
-The Plan with AI tab then shows "Flight search: Duffel (test data)".
+Test mode returns sample data from Duffel's test environment, never real flights, fares, or
+availability. Results can carry real airline names as well as the fictional "Duffel Airways", so
+every result, saved option, booking note, and Atlas reply that uses them says it is Duffel test
+data. If Atlas leaves that out, the app adds the notice to the reply. Live tokens
+(`duffel_live_...`) are not accepted yet. Duffel does not charge for test searches.
 
-How it behaves:
+### With either provider
 
-- Test mode returns sample data from Duffel's test environment, never real flights, fares, or
-  availability. Results can carry real airline names as well as the fictional "Duffel Airways",
-  so the labels matter. Every result in the panel, every saved
-  option and booking note, and every Atlas reply that uses flight results says it is Duffel test
-  data. If Atlas leaves that out, the app adds the notice to the reply.
-- The search is prefilled from the trip's departure city, destination, dates, and group size.
-  City names are resolved to airport or city codes through Duffel's place suggestions; you can
-  also type a 3-letter code.
+- The search is prefilled from the trip's departure city, destination, dates, and group size. You
+  can type a city name or a 3-letter airport code.
 - Results show the airline, local departure and arrival times, stops, duration, total price and
-  currency for all travelers, source, and retrieval time, plus a link to compare the route on
-  Google Flights and book elsewhere.
-- **Save to options** adds the flight as a suggestion with its source, price, and retrieval time.
-  **Save and track as considering** also adds a flight booking record that is "Not booked yet"
-  with you marked as considering. Nothing is ever marked booked, and the app never orders or pays
-  through Duffel.
-- Without a token, the panel and Atlas say flight search is not configured. A Duffel error shows
-  a message and changes no trip data.
-- Live tokens (`duffel_live_...`) are not accepted yet; the app treats flight search as not
-  configured until live fares are supported.
-
-Duffel does not charge for searches in test mode.
+  currency for all travelers, source, and retrieval time.
+- **Save to options** adds the flight as a suggestion with its source, price, link, and retrieval
+  time. **Save and track as considering** also adds a flight booking record that is "Not booked
+  yet" with you marked as considering. Nothing is ever marked booked, and the app never books or
+  pays for flights. A round trip saved before its return is chosen says so in its description.
+- Without a key or token, the panel and Atlas say flight search is not configured.
 
 ## Environment variables
 
@@ -243,8 +280,11 @@ Duffel does not charge for searches in test mode.
 | `RESEARCH_PROVIDER`              | No          | `none` (default) or `openai_web` for OpenAI web search          |
 | `OPENAI_WEB_SEARCH_MODEL`        | No          | Model for web searches. Defaults to `OPENAI_MODEL`              |
 | `OPENAI_WEB_SEARCH_CONTEXT_SIZE` | No          | `low` (default), `medium`, or `high` search context             |
-| `FLIGHT_PROVIDER`                | No          | `duffel` (default) or `none` to turn flight search off          |
-| `DUFFEL_ACCESS_TOKEN`            | For flights | Duffel test token (`duffel_test_...`). Empty turns flights off  |
+| `FLIGHT_PROVIDER`                | No          | `serpapi` (default), `duffel`, or `none` to turn flights off    |
+| `SERPAPI_API_KEY`                | For flights | SerpApi key for Google Flights results. Empty turns flights off |
+| `SERPAPI_CACHE_HOURS`            | No          | Hours to reuse identical SerpApi searches (0 to 24). Default 3  |
+| `SERPAPI_API_URL`                | No          | SerpApi base URL. The end-to-end tests point it at a stub       |
+| `DUFFEL_ACCESS_TOKEN`            | For Duffel  | Duffel test token (`duffel_test_...`)                           |
 | `DUFFEL_API_URL`                 | No          | Duffel API base URL. The end-to-end tests point it at a stub    |
 | `INVITE_TTL_DAYS`                | No          | Default invite link lifetime in days (1 to 30). Defaults to 7   |
 | `TEST_DATABASE_URL`              | No          | Overrides the test database URL. Its name must end with `_test` |
@@ -276,17 +316,19 @@ Only `NEXT_PUBLIC_APP_NAME` reaches the browser. Everything else stays on the se
 
 - `pnpm test` runs two Vitest projects. `unit` covers pure logic (budget math, trip-detail
   patching, follow-up priorities, lifecycle rules, schemas, the OpenAI request mapping and the
-  OpenAI web search provider and the Duffel flight provider against mocked clients).
-  `integration` runs against `trip_planner_test` and covers authorization, invitations,
-  concurrency, saving flights, and the Atlas orchestrator with a scripted provider.
+  OpenAI web search provider, and the SerpApi and Duffel flight providers and the flight search
+  cache against mocked clients). `integration` runs against `trip_planner_test` and covers
+  authorization, invitations, concurrency, saving flights, the database search cache, and the
+  Atlas orchestrator with a scripted provider.
 - `pnpm test:e2e` runs Playwright against a production build and the test database. Install the
-  browser once with `pnpm exec playwright install chromium`. It starts six local processes on
-  ports 3310 to 3313, 3318, and 3319: the app with Atlas pointed at a local OpenAI stub and flight
-  search pointed at a local Duffel stub (3310), the app with no AI key and no Duffel token (3311),
-  the app with OpenAI web search served by the stub (3312), the app with web search selected but no
-  key (3313), the Duffel stub (3318), and the OpenAI stub (3319). No test calls the real OpenAI or
-  Duffel API. Test users get sessions inserted directly into the test database; the
-  app has no test-only sign-in route.
+  browser once with `pnpm exec playwright install chromium`. It starts eight local processes on
+  ports 3310 to 3314 and 3317 to 3319: the app with Atlas pointed at a local OpenAI stub and flight
+  search pointed at a local Duffel stub (3310), the app with no AI key and no flight key (3311), the
+  app with OpenAI web search served by the stub (3312), the app with web search selected but no key
+  (3313), the app with Atlas and flight search pointed at a local SerpApi stub (3314), the SerpApi
+  stub (3317), the Duffel stub (3318), and the OpenAI stub (3319). No test calls the real OpenAI,
+  SerpApi, or Duffel API. Test users get sessions inserted directly into the test database; the app
+  has no test-only sign-in route.
 
 Both suites refuse to run against a database whose name does not end in `_test`.
 
@@ -309,10 +351,10 @@ src/server/          server-only code
   actions/           server actions used by the UI
   ai/                Atlas orchestrator, tools, prompts, provider interface, OpenAI provider
   research/          research provider interface, OpenAI web search, and "not configured"
-  flights/           flight search provider interface and the Duffel implementation
+  flights/           flight search provider interface, SerpApi and Duffel, and the search cache
   financial/         documented extension point for future card and rewards data
 tests/               Vitest unit and integration tests
-e2e/                 Playwright tests and the local OpenAI and Duffel stubs
+e2e/                 Playwright tests and the local OpenAI, SerpApi, and Duffel stubs
 ```
 
 ## Current limitations
@@ -321,8 +363,9 @@ e2e/                 Playwright tests and the local OpenAI and Duffel stubs
   structured flight or hotel inventory, so prices can be out of date by the time someone books.
   With `RESEARCH_PROVIDER="none"`, options are added by hand and Atlas suggests unverified ideas
   without prices.
-- Flight search runs on Duffel test mode only, so its results are sample data. There is no price
-  tracking and no booking through Duffel.
+- Flight search shows Google Flights results through SerpApi, limited by the SerpApi plan's
+  quota, and depends on SerpApi keeping up with Google's pages. Prices are in US dollars. There is
+  no price tracking and no booking through the app. Duffel runs in test mode only.
 - Atlas replies arrive in one piece (no streaming).
 - Rate limiting is in memory, which fits a single server process. Use a shared store if you run
   several instances.

@@ -82,3 +82,7 @@ export const saveFlightSchema = z.object({
   token: z.string().min(1).max(20_000),
   asBooking: z.boolean(),
 });
+
+export const returnFlightsSchema = z.object({
+  token: z.string().min(1).max(20_000),
+});

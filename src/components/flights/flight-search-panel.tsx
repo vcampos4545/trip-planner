@@ -4,9 +4,12 @@ import {
   ArrowRight,
   ExternalLink,
   FlaskConical,
+  History,
   Plane,
+  PlaneLanding,
   PlaneTakeoff,
   SearchX,
+  TrendingUp,
 } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -32,12 +35,16 @@ import {
   TEST_DATA_NOTICE,
   bookElsewhereUrl,
   formatDuration,
+  isRoundTrip,
   localClock,
   localDate,
+  placeCodes,
   stopsLabel,
   travelersLabel,
   type FlightOffer,
   type FlightSlice,
+  type PendingReturn,
+  type PriceInsights,
 } from "@/lib/flights";
 import { formatMoneyValue } from "@/lib/money";
 import {
@@ -47,6 +54,7 @@ import {
 import {
   saveFlightAction,
   searchFlightsAction,
+  searchReturnFlightsAction,
   type FlightSearchResponse,
 } from "@/server/actions/flights";
 
@@ -86,7 +94,7 @@ export function FlightSearchPanel({
           <p className="mt-1 text-xs text-muted-foreground">
             {status.testMode
               ? `Connected to ${status.label}. Results are samples from Duffel's test environment, not real flights, fares, or availability.`
-              : `Results from ${status.label}. Fares can change before booking.`}{" "}
+              : `Results from ${status.label}, with prices as Google Flights shows them when retrieved. Prices can change before you book. Searches share a limited monthly quota, so an identical search within a few hours reuses the earlier results.`}{" "}
             Saving a flight adds it for the group to review. Nothing is booked.
           </p>
           <FlightSearch tripId={tripId} defaults={defaults} />
@@ -250,14 +258,18 @@ function FlightResults({
   response: FlightSearchResponse;
 }) {
   const { search } = response;
-  const compareUrl = bookElsewhereUrl({
-    origin: search.origin.iataCode,
-    destination: search.destination.iataCode,
-    departureDate: search.departureDate,
-    returnDate: search.returnDate,
-  });
+  const googleUrl = response.results.find((result) => result.offer.bookingUrl)
+    ?.offer.bookingUrl;
+  const compareUrl =
+    googleUrl ??
+    bookElsewhereUrl({
+      origin: search.origin.iataCode,
+      destination: search.destination.iataCode,
+      departureDate: search.departureDate,
+      returnDate: search.returnDate,
+    });
   const resolved = [search.origin, search.destination].filter(
-    (place) => place.query.toUpperCase() !== place.iataCode,
+    (place) => place.query.toUpperCase() !== placeCodes(place),
   );
   return (
     <div className="space-y-3" data-testid="flight-results">
@@ -281,9 +293,15 @@ function FlightResults({
         {response.sourceName}, retrieved {formatTimestamp(response.retrievedAt)}
         . {travelersLabel(search.passengers)}, prices are totals.
         {resolved.length > 0
-          ? ` Searched ${resolved.map((place) => `"${place.query}" as ${place.iataCode}`).join(" and ")}.`
+          ? ` Searched ${resolved.map((place) => `"${place.query}" as ${placeCodes(place)}`).join(" and ")}.`
           : ""}
       </p>
+      {response.cached ? (
+        <CachedNotice retrievedAt={response.retrievedAt} />
+      ) : null}
+      {response.priceInsights ? (
+        <PriceInsightsNote insights={response.priceInsights} />
+      ) : null}
       {response.results.length === 0 ? (
         <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
           No flights matched. Try other dates, more stops, or any cabin.
@@ -306,10 +324,57 @@ function FlightResults({
         rel="noopener noreferrer nofollow"
         className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
       >
-        Compare this route on Google Flights to book elsewhere
+        {googleUrl
+          ? "Open this search on Google Flights to book"
+          : "Compare this route on Google Flights to book elsewhere"}
         <ExternalLink className="size-3" aria-hidden />
       </a>
     </div>
+  );
+}
+
+function CachedNotice({ retrievedAt }: { retrievedAt: string }) {
+  return (
+    <p
+      className="flex items-start gap-1.5 text-xs text-muted-foreground"
+      data-testid="flight-cached-notice"
+    >
+      <History className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+      Reused the same search from {formatTimestamp(retrievedAt)} to save the
+      search quota. Prices were not refreshed and may have changed.
+    </p>
+  );
+}
+
+function PriceInsightsNote({ insights }: { insights: PriceInsights }) {
+  const money = (value: string | null) =>
+    value ? formatMoneyValue(value, insights.currency) : null;
+  const range =
+    insights.typicalLow && insights.typicalHigh
+      ? `usually ${money(insights.typicalLow)} to ${money(insights.typicalHigh)}`
+      : null;
+  const parts = [
+    insights.priceLevel ? `prices are ${insights.priceLevel} right now` : null,
+    range,
+    insights.lowestPrice ? `lowest here ${money(insights.lowestPrice)}` : null,
+  ].filter(Boolean);
+  return (
+    <p
+      className="flex items-start gap-1.5 rounded-lg border bg-muted/40 px-3 py-2 text-xs"
+      data-testid="flight-price-insights"
+    >
+      <TrendingUp
+        className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+        aria-hidden
+      />
+      <span>
+        <span className="font-medium">
+          Price insight from {insights.sourceName}:
+        </span>{" "}
+        {parts.join(", ")}. This is Google&apos;s estimate for the route, not a
+        promise of any fare.
+      </span>
+    </p>
   );
 }
 
@@ -362,7 +427,7 @@ function FlightResultCard({
               key={index}
               slice={slice}
               label={
-                offer.slices.length > 1
+                isRoundTrip(offer)
                   ? index === 0
                     ? "Outbound"
                     : "Return"
@@ -370,13 +435,18 @@ function FlightResultCard({
               }
             />
           ))}
+          {offer.pendingReturn ? (
+            <PendingReturnRow pending={offer.pendingReturn} />
+          ) : null}
         </div>
         <div className="text-right">
           <p className="text-lg font-semibold" data-testid="flight-price">
             {price}
           </p>
           <p className="text-xs text-muted-foreground">
-            {offer.totalCurrency} total, {travelersLabel(offer.passengers)}
+            {offer.totalCurrency}{" "}
+            {isRoundTrip(offer) ? "round-trip total" : "total"},{" "}
+            {travelersLabel(offer.passengers)}
           </p>
           <p className="text-xs text-muted-foreground">
             {offer.sourceName}, retrieved {formatTimestamp(offer.retrievedAt)}
@@ -402,8 +472,105 @@ function FlightResultCard({
             ? "Tracking as considering"
             : "Save and track as considering"}
         </Button>
+        {offer.bookingUrl ? (
+          <a
+            href={offer.bookingUrl}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            View on Google Flights to book
+            <ExternalLink className="size-3" aria-hidden />
+          </a>
+        ) : null}
       </div>
+      {offer.pendingReturn ? (
+        <ReturnFlights tripId={tripId} token={token} />
+      ) : null}
     </li>
+  );
+}
+
+function PendingReturnRow({ pending }: { pending: PendingReturn }) {
+  return (
+    <div className="text-sm" data-testid="flight-pending-return">
+      <p className="text-xs text-muted-foreground">
+        Return · {formatDateOnly(pending.date, "weekday")}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Return flight not chosen yet. The price is the round-trip total.
+      </p>
+    </div>
+  );
+}
+
+/** Return options load only on request, because each load spends one search from the quota. */
+function ReturnFlights({ tripId, token }: { tripId: string; token: string }) {
+  const [pending, startTransition] = useTransition();
+  const [response, setResponse] = useState<FlightSearchResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!response) {
+    return (
+      <div className="mt-3 space-y-2 border-t pt-3">
+        <FormError message={error} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={pending}
+            onClick={() =>
+              startTransition(async () => {
+                const result = await searchReturnFlightsAction(tripId, {
+                  token,
+                });
+                if (result.ok) {
+                  setError(null);
+                  setResponse(result.data);
+                } else {
+                  setError(result.error);
+                }
+              })
+            }
+          >
+            <PlaneLanding aria-hidden />
+            {pending ? "Loading return flights..." : "Show return flights"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Uses one search from the quota.
+          </span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-3 space-y-2 border-t pt-3" data-testid="return-flights">
+      <p className="text-xs text-muted-foreground">
+        {response.results.length} return{" "}
+        {response.results.length === 1 ? "option" : "options"} with this
+        outbound flight from {response.sourceName}, retrieved{" "}
+        {formatTimestamp(response.retrievedAt)}. Prices are round-trip totals.
+      </p>
+      {response.cached ? (
+        <CachedNotice retrievedAt={response.retrievedAt} />
+      ) : null}
+      {response.results.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No return flights matched. Try other dates or more stops.
+        </p>
+      ) : (
+        <ul className="grid gap-3">
+          {response.results.map((result) => (
+            <FlightResultCard
+              key={result.offer.offerId}
+              tripId={tripId}
+              offer={result.offer}
+              token={result.token}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

@@ -51,6 +51,22 @@ export type FlightSlice = {
   segments: FlightSegment[];
 };
 
+/**
+ * A round trip priced as a whole whose return flight has not been loaded yet. Google Flights
+ * prices round trips from the outbound choice; the return options cost another search, so they
+ * are fetched only when someone asks for them.
+ */
+export type PendingReturn = {
+  /** The return date that was searched (YYYY-MM-DD). */
+  date: string;
+  /** The provider's token for loading return options for this outbound flight. */
+  token: string;
+  /** The airport codes as sent to the provider, comma separated. */
+  originCodes: string;
+  destinationCodes: string;
+  maxStops: number;
+};
+
 /** One priced itinerary returned by a flight search provider. */
 export type FlightOffer = {
   offerId: string;
@@ -65,11 +81,35 @@ export type FlightOffer = {
   /** ISO timestamp of the search that returned this offer. */
   retrievedAt: string;
   sourceName: string;
+  /** The provider that returned it, such as "serpapi" or "duffel". */
+  providerId?: string;
   /** True when the provider's test environment produced it. Test offers are never real. */
   testMode: boolean;
+  /** Set on a round trip whose price includes a return flight that is not chosen yet. */
+  pendingReturn?: PendingReturn | null;
+  /** Where to see this result and book it outside the app, when the provider gave a link. */
+  bookingUrl?: string | null;
 };
 
-export type ResolvedPlace = { query: string; iataCode: string; name: string };
+export type ResolvedPlace = {
+  query: string;
+  /** The main airport or city code, used for labels and links. */
+  iataCode: string;
+  name: string;
+  /** Every airport searched when a name matched several, such as a city with three airports. */
+  airportCodes?: string[];
+};
+
+/** Google's view of how the returned prices compare with usual prices for the route. */
+export type PriceInsights = {
+  sourceName: string;
+  currency: string;
+  lowestPrice: string | null;
+  /** "low", "typical", or "high", exactly as the source labelled it. */
+  priceLevel: string | null;
+  typicalLow: string | null;
+  typicalHigh: string | null;
+};
 
 export type FlightSearchSummary = {
   origin: ResolvedPlace;
@@ -119,11 +159,22 @@ export function stopsLabel(stops: number): string {
   return stops === 1 ? "1 stop" : `${stops} stops`;
 }
 
+export function isRoundTrip(offer: FlightOffer): boolean {
+  return offer.slices.length > 1 || Boolean(offer.pendingReturn);
+}
+
+/** "JFK" or "JFK, LGA, EWR" when a place name matched several airports. */
+export function placeCodes(place: ResolvedPlace): string {
+  return place.airportCodes?.length
+    ? place.airportCodes.join(", ")
+    : place.iataCode;
+}
+
 export function flightTitle(offer: FlightOffer): string {
   const first = offer.slices[0];
   if (!first) return offer.airline.name;
   const route = `${first.origin.iataCode} to ${first.destination.iataCode}`;
-  const kind = offer.slices.length > 1 ? "round trip" : "one way";
+  const kind = isRoundTrip(offer) ? "round trip" : "one way";
   return `${offer.airline.name}: ${route}, ${kind}`;
 }
 
@@ -147,6 +198,17 @@ export function describeSlice(slice: FlightSlice): string {
   ]
     .filter(Boolean)
     .join(", ");
+}
+
+/** Describes every leg, including a return that is priced but not chosen yet. */
+export function describeOffer(offer: FlightOffer): string[] {
+  const lines = offer.slices.map(describeSlice);
+  if (offer.pendingReturn) lines.push(pendingReturnNote(offer.pendingReturn));
+  return lines;
+}
+
+export function pendingReturnNote(pending: PendingReturn): string {
+  return `Return on ${pending.date}: flight not chosen yet. The price is the round-trip total.`;
 }
 
 export function travelersLabel(count: number): string {

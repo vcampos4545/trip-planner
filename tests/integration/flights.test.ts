@@ -254,7 +254,8 @@ describe("Atlas flight search", () => {
     );
     expect(provider.toolOutputs[0]!.output).toEqual({
       ok: false,
-      error: "Duffel rejected the server's access token.",
+      error:
+        "Duffel rejected the server's access token. Nothing in the trip was changed.",
     });
     expect(result.effects).toEqual([
       expect.objectContaining({ tool: "search_flights", ok: false }),

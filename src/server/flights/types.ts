@@ -2,6 +2,7 @@ import type {
   CabinClass,
   FlightOffer,
   FlightSearchSummary,
+  PriceInsights,
 } from "@/lib/flights";
 
 export type FlightSearchQuery = {
@@ -22,6 +23,10 @@ export type FlightSearchResult = {
   retrievedAt: string;
   sourceName: string;
   testMode: boolean;
+  /** The source's own price comparison for the route, when it returned one. */
+  priceInsights?: PriceInsights | null;
+  /** True when this came from the app's search cache instead of a new provider request. */
+  cached?: boolean;
 };
 
 export type FlightProviderErrorKind =
@@ -63,6 +68,15 @@ export interface FlightSearchProvider {
   readonly testMode: boolean;
   search(
     query: FlightSearchQuery,
+    signal?: AbortSignal,
+  ): Promise<FlightSearchResult>;
+  /**
+   * Loads return options for a round trip whose outbound was priced without a chosen return
+   * (`offer.pendingReturn`). Each returned offer has both legs. Providers that price whole round
+   * trips in one request leave this out.
+   */
+  searchReturns?(
+    offer: FlightOffer,
     signal?: AbortSignal,
   ): Promise<FlightSearchResult>;
 }

@@ -765,3 +765,19 @@ model ActivityLog {
 
   @@index([tripId, createdAt(sort: Desc)])
 }
+
+// ---------------------------------------------------------------------------
+// Flight search cache
+// ---------------------------------------------------------------------------
+
+// Short-lived cache of flight search responses, shared across trips, so a repeated search does not
+// spend the provider's quota. Holds public fare data and place lookups only, never trip or user
+// data.
+model FlightSearchCache {
+  key       String   @id
+  payload   Json
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}

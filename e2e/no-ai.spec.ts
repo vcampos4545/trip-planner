@@ -28,13 +28,13 @@ test("without an AI key the app still works and says Atlas needs configuration",
     "Flight search not configured",
   );
 
-  // Without a Duffel token the flight panel says so instead of showing a search.
+  // Without a SerpApi key the flight panel says so instead of showing a search.
   await page.goto(`/trips/${tripId}/options`);
   await expect(page.getByTestId("flights-not-configured")).toContainText(
     "Flight search is not configured",
   );
   await expect(page.getByTestId("flights-not-configured")).toContainText(
-    "DUFFEL_ACCESS_TOKEN is not set on the server.",
+    "SERPAPI_API_KEY is not set on the server.",
   );
   await expect(
     page.getByRole("button", { name: "Search flights" }),

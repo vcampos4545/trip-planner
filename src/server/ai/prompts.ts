@@ -44,9 +44,12 @@ const LIVE_SEARCH_RULES = `Live search rules:
 - If search_options fails or is unavailable, say live research failed. Do not present general knowledge as live results.`;
 
 const FLIGHT_RULES = {
-  off: "Flight search is not configured. If asked about flights, say live flight search is not set up, and do not quote airlines, times, or fares.",
-  test: "For flights use search_flights. It is connected to Duffel's test environment, so every result is test data, not real flights, fares, or availability. Whenever you mention flight results, say clearly that they are Duffel test data. Answer about flights only from search_flights results in this turn, and never claim a flight is booked or reserved. Members can save a result with save_flight_option or from the Options tab.",
-  live: "For flights use search_flights. Answer about flights only from its results in this turn, mention the source and retrieval time, and say fares can change. This app does not book flights; never claim a flight is booked or reserved.",
+  off: () =>
+    "Flight search is not configured. If asked about flights, say live flight search is not set up, and do not quote airlines, times, or fares.",
+  test: () =>
+    "For flights use search_flights. It is connected to Duffel's test environment, so every result is test data, not real flights, fares, or availability. Whenever you mention flight results, say clearly that they are Duffel test data. Answer about flights only from search_flights results in this turn, and never claim a flight is booked or reserved. Members can save a result with save_flight_option or from the Options tab.",
+  live: (source: string) =>
+    `For flights use search_flights. Its results come from ${source}. When you mention them, name that source and the retrieval time, and say prices can change before booking. Answer about flights only from its results in this turn. Each search spends a limited monthly quota: call search_flights only when the user asks for flights or flight prices, and never to fill in a reply. For a round trip the results show the outbound flight with the round-trip total; call search_return_flights only when the user asks for the return options of a specific result. Price insights are Google's estimate for the route; call them Google's. To book, point people to the Google Flights link. This app does not book flights; never claim a flight is booked or reserved.`,
 } as const;
 
 export function buildInstructions(params: {
@@ -61,6 +64,8 @@ export function buildInstructions(params: {
   researchUnavailableReason?: string | null;
   /** "test" when flight results come from a provider's test environment. */
   flightSearch?: "off" | "test" | "live";
+  /** Where live flight results come from, such as "Google Flights via SerpApi". */
+  flightSource?: string;
 }) {
   const flightSearch = params.flightSearch ?? "off";
   const known = describeKnown(params.draft);
@@ -80,7 +85,9 @@ export function buildInstructions(params: {
     params.phase === "trip" && params.researchAvailable
       ? LIVE_SEARCH_RULES
       : null,
-    params.phase === "trip" ? FLIGHT_RULES[flightSearch] : null,
+    params.phase === "trip"
+      ? FLIGHT_RULES[flightSearch](params.flightSource ?? "the flight provider")
+      : null,
     RULES,
     `Known so far (JSON): ${JSON.stringify(known)}`,
     topics.length > 0
