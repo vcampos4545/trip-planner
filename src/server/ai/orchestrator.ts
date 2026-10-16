@@ -188,6 +188,7 @@ export async function sendAtlasMessage(
     researchAvailable: research.isConfigured,
     researchUnavailableReason: research.unavailableReason ?? null,
     flightSearch: !flights ? "off" : flights.testMode ? "test" : "live",
+    flightSource: flights?.label,
   });
 
   let replied = false;
