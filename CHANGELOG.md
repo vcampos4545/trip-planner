@@ -9,6 +9,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Trips with several stops: an ordered list of places with optional dates, kept apart from the
+  airports people fly into and home from (`TripStop`, `flyIntoAirport`, `flyOutOfAirport`). The
+  trip header shows the route, and a **Stops** dialog edits it. Atlas records stops with the new
+  `update_trip_stops` tool; adding stops or missing dates applies directly, other changes wait for
+  a member to accept them.
+- Atlas records bookings you say you made with the new `record_booking` tool: flights, stays, and
+  ground legs such as a friend driving you between stops, for you or a named member, saved under
+  Bookings as booked. A flight from an earlier search is matched to the exact result Atlas showed,
+  and an ambiguous reference makes Atlas ask which one. The chat shows **Edit** and **Undo** for
+  each recorded booking, and nothing is presented as confirmed with the airline.
+- Trip themes (`TripTheme`). Atlas records a theme you state, asks "Is this a ski trip?" when the
+  season and well-known ski destinations only imply it, proposes a better working title once the
+  theme is known, and suggests the usual tasks (rentals, lift passes, lessons, gear) with the new
+  `suggest_theme_tasks` tool.
+- Itinerary week view: days as columns, hours as rows, and an all-day lane, showing itinerary
+  items, everyone's flights labelled Booked or Considering per traveler, ground legs, and stays,
+  with a "Who's flying when" strip. Phones start on a three-day view. The day list is still there.
+
 - Flight search with Google Flights results through SerpApi, selected with
   `FLIGHT_PROVIDER="serpapi"` and `SERPAPI_API_KEY`. Results are labelled "Google Flights via
   SerpApi" with their retrieval time, prices are shown as Google returned them, and each result
@@ -36,9 +54,26 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Atlas opens as a panel from an **Ask Atlas** button on every trip tab instead of having its own
+  Plan with AI tab. The "Try asking" suggestions stay, and "Where Atlas works from" moved behind a
+  small info button. Old Plan with AI links open the panel.
+- Flight search moved from the Options tab to Bookings > Flights. **Save as considering** adds a
+  flight booking with you as considering; **Save to options only** keeps just the option. The
+  search prefills the airport people fly into when the trip has one.
+- On a trip with one member, nothing is phrased as waiting for the group, and a change Atlas
+  proposes to something already set can be accepted or declined in the chat.
+- Flight result IDs continue across a conversation, and the results a reply showed are saved with
+  it, so later messages can refer back to them.
 - `FLIGHT_PROVIDER` now defaults to `serpapi`. Set `FLIGHT_PROVIDER="duffel"` to keep using Duffel
   test mode. Atlas names the configured flight source instead of assuming Duffel.
 - Round-trip results show "round-trip total" next to the price.
+
+### Upgrade notes
+
+- Run `pnpm db:deploy`. The migration adds stops, airports, and themes, and turns each trip's
+  destination into its first stop.
+- Flights you told Atlas about before this release were saved as notes, not bookings. Tell Atlas
+  again (or search again and say which result you bought) to record them under Bookings > Flights.
 
 ## [0.2.0] - 2026-10-15
 
