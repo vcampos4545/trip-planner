@@ -822,9 +822,9 @@ model ActivityLog {
 // Flight search cache
 // ---------------------------------------------------------------------------
 
-// Short-lived cache of flight search responses, shared across trips, so a repeated search does not
-// spend the provider's quota. Holds public fare data and place lookups only, never trip or user
-// data.
+// Short-lived cache of flight and stay search responses, shared across trips, so a repeated search
+// does not spend the provider's quota. Holds public fares, hotel rates, and place lookups only,
+// never trip or user data. Keys start with the provider ID (serpapi, serpapi-hotels).
 model FlightSearchCache {
   key       String   @id
   payload   Json
