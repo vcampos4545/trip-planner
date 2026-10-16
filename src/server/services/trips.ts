@@ -4,8 +4,16 @@ import { z } from "zod";
 
 import type { Prisma } from "@/generated/prisma/client";
 import type { TripStage, TripStartMode } from "@/generated/prisma/enums";
-import { parseDateOnly } from "@/lib/dates";
+import { parseDateOnly, toDateOnly } from "@/lib/dates";
 import type { TripProgress } from "@/lib/domain/next-action";
+import {
+  applyStopOps,
+  classifyStopChange,
+  stopListProblem,
+  stopListSchema,
+  type StopOp,
+  type TripStopInput,
+} from "@/lib/domain/stops";
 import {
   applyChanges,
   classifyPatch,
@@ -30,12 +38,16 @@ import { logActivity } from "@/server/activity";
 import { db, type DbTransaction } from "@/server/db";
 import { conflict, invalid, notFound } from "@/server/errors";
 
+import { loadStops, replaceStopsTx, syncDestinationStopTx } from "./stops";
 import {
+  describeChange,
   describeFields,
   detailsToTripData,
-  FIELD_LABELS,
   tripToDetails,
+  type ProposalChange,
 } from "./trip-mapping";
+
+export { describeChange } from "./trip-mapping";
 
 const MEMBER_USER_SELECT = {
   id: true,
@@ -182,7 +194,8 @@ export async function getTripWorkspace(tripId: string, userId: string) {
       updatedBy: { select: { id: true, name: true } },
     },
   });
-  return { access, trip };
+  const stops = await loadStops(db, tripId);
+  return { access, trip, stops };
 }
 
 export async function getTripDetails(access: TripAccess) {
@@ -213,6 +226,7 @@ async function createOrganizerTrip(
     userId: string;
     startMode: TripStartMode;
     data: Omit<Prisma.TripUncheckedCreateInput, "createdById" | "startMode">;
+    stops?: TripStopInput[];
   },
 ) {
   const trip = await tx.trip.create({
@@ -226,6 +240,12 @@ async function createOrganizerTrip(
   await tx.tripMember.create({
     data: { tripId: trip.id, userId: params.userId, role: "ORGANIZER" },
   });
+  if (params.stops && params.stops.length > 0) {
+    await replaceStopsTx(tx, trip.id, params.stops);
+  } else {
+    // A trip's single destination is its first stop.
+    await syncDestinationStopTx(tx, trip.id, null, trip.destination);
+  }
   await logActivity(tx, {
     tripId: trip.id,
     actorId: params.userId,
@@ -270,14 +290,21 @@ export async function createTripFromDraft(
   if (problem) {
     details.endDate = null;
   }
+  if (!details.destination && draft.stops.length > 0)
+    details.destination = draft.stops[0]!.name;
   const data = detailsToTripData(details) as Omit<
     Prisma.TripUncheckedCreateInput,
     "createdById" | "startMode"
   >;
+  // Stops whose dates no longer fit are kept by name only.
+  const stops = stopListProblem(draft.stops, details)
+    ? draft.stops.map((stop) => ({ ...stop, startDate: null, endDate: null }))
+    : draft.stops;
   const trip = await createOrganizerTrip(tx, {
     userId,
     startMode: params.startMode,
     data: { ...data, title: details.title! },
+    stops: stopListProblem(stops, details) ? [] : stops,
   });
   await addPreferencesTx(tx, trip.id, userId, draft.preferences, "ATLAS");
   await addCandidatesTx(tx, trip.id, userId, draft.candidateDestinations);
@@ -312,6 +339,12 @@ export async function updateTripDetails(
       },
     });
     if (result.count !== 1) throw conflict();
+    await syncDestinationStopTx(
+      tx,
+      access.tripId,
+      before.destination,
+      parsed.destination,
+    );
     await logActivity(tx, {
       tripId: access.tripId,
       actorId: access.userId,
@@ -495,34 +528,133 @@ export async function removePreference(
 
 export type AtlasPatchResult = {
   applied: FieldChange[];
-  proposal: { id: string; summary: string; changes: FieldChange[] } | null;
+  proposal: { id: string; summary: string; changes: ProposalChange[] } | null;
   rejected: string[];
   addedPreferences: number;
   addedCandidates: number;
 };
 
 const proposalChangesSchema = z.array(
-  z.object({
-    field: z.enum(
-      TRIP_DETAIL_FIELDS as [keyof TripDetails, ...(keyof TripDetails)[]],
-    ),
-    from: z.unknown(),
-    to: z.unknown(),
-  }),
+  z.union([
+    z.object({
+      field: z.literal("stops"),
+      from: stopListSchema,
+      to: stopListSchema,
+    }),
+    z.object({
+      field: z.enum(
+        TRIP_DETAIL_FIELDS as [keyof TripDetails, ...(keyof TripDetails)[]],
+      ),
+      from: z.unknown(),
+      to: z.unknown(),
+    }),
+  ]),
 );
 
-function formatValue(value: unknown) {
-  if (value === null || value === undefined || value === "") return "not set";
-  if (Array.isArray(value))
-    return value.length ? value.join(", ").toLowerCase() : "not set";
-  if (typeof value === "boolean") return value ? "yes" : "no";
-  if (typeof value === "string" && value.length > 3 && /^[A-Z_]+$/.test(value))
-    return value.replaceAll("_", " ").toLowerCase();
-  return String(value);
+/** Records a pending proposal, or returns the identical one that is already waiting. */
+async function createProposalTx(
+  tx: DbTransaction,
+  access: TripAccess,
+  changes: ProposalChange[],
+  conversationId: string | null,
+) {
+  const summary = changes.map(describeChange).join("; ");
+  const duplicate = await tx.tripDetailProposal.findFirst({
+    where: { tripId: access.tripId, status: "PENDING", summary },
+    select: { id: true },
+  });
+  if (duplicate) return { id: duplicate.id, summary, changes };
+  const created = await tx.tripDetailProposal.create({
+    data: {
+      tripId: access.tripId,
+      conversationId,
+      proposedById: access.userId,
+      summary,
+      changes: changes as unknown as Prisma.InputJsonValue,
+    },
+  });
+  await logActivity(tx, {
+    tripId: access.tripId,
+    actorId: access.userId,
+    type: "PROPOSAL_CREATED",
+    summary: `got an Atlas proposal to change the ${changes
+      .map((change) =>
+        change.field === "stops" ? "stops" : describeFields([change.field]),
+      )
+      .join(", ")}`,
+    entityType: "proposal",
+    entityId: created.id,
+  });
+  return { id: created.id, summary, changes };
 }
 
-export function describeChange(change: FieldChange) {
-  return `${FIELD_LABELS[change.field]}: ${formatValue(change.from)} → ${formatValue(change.to)}`;
+export type AtlasStopsResult = {
+  kind: "none" | "applied" | "proposal";
+  stops: TripStopInput[];
+  proposal: { id: string; summary: string } | null;
+};
+
+/**
+ * Applies small stop changes from Atlas. Adding stops or filling in missing dates applies
+ * directly. Removing, renaming, reordering, or re-dating a stop someone already set becomes a
+ * proposal that a member accepts, like other changes to known details.
+ */
+export async function applyAtlasStops(
+  access: TripAccess,
+  params: { ops: StopOp[]; conversationId: string | null },
+): Promise<AtlasStopsResult> {
+  return db.$transaction(async (tx) => {
+    const trip = await tx.trip.findUniqueOrThrow({
+      where: { id: access.tripId },
+    });
+    const current = await loadStops(tx, trip.id);
+    const applied = applyStopOps(current, params.ops);
+    if (!applied.ok) throw invalid(`Nothing was changed. ${applied.error}`);
+    const problem = stopListProblem(applied.stops, {
+      startDate: trip.startDate ? toDateOnly(trip.startDate) : null,
+      endDate: trip.endDate ? toDateOnly(trip.endDate) : null,
+    });
+    if (problem) throw invalid(`Nothing was changed. ${problem}`);
+    const kind = classifyStopChange(current, applied.stops);
+    if (kind === "none")
+      return { kind: "none", stops: current, proposal: null };
+    if (kind === "overwrite") {
+      const proposal = await createProposalTx(
+        tx,
+        access,
+        [{ field: "stops", from: current, to: applied.stops }],
+        params.conversationId,
+      );
+      return {
+        kind: "proposal",
+        stops: current,
+        proposal: { id: proposal.id, summary: proposal.summary },
+      };
+    }
+    const result = await tx.trip.updateMany({
+      where: { id: trip.id, version: trip.version },
+      data: {
+        ...(trip.destination ? {} : { destination: applied.stops[0]!.name }),
+        version: { increment: 1 },
+        updatedById: access.userId,
+      },
+    });
+    if (result.count !== 1)
+      throw conflict(
+        "The trip changed while Atlas was working. Please send your message again.",
+      );
+    await replaceStopsTx(tx, trip.id, applied.stops);
+    await logActivity(tx, {
+      tripId: trip.id,
+      actorId: access.userId,
+      type: "TRIP_UPDATED",
+      summary: "updated the stops via Atlas",
+      entityType: "trip",
+      entityId: trip.id,
+      metadata: { fields: ["stops"], via: "atlas" },
+    });
+    return { kind: "applied", stops: applied.stops, proposal: null };
+  });
 }
 
 /**
@@ -572,6 +704,16 @@ export async function applyAtlasPatch(
         throw conflict(
           "The trip changed while Atlas was working. Please send your message again.",
         );
+      const destination = applied.find(
+        (change) => change.field === "destination",
+      );
+      if (destination)
+        await syncDestinationStopTx(
+          tx,
+          trip.id,
+          current.destination,
+          destination.to as string,
+        );
       await logActivity(tx, {
         tripId: trip.id,
         actorId: access.userId,
@@ -586,36 +728,10 @@ export async function applyAtlasPatch(
       });
     }
 
-    let proposal: AtlasPatchResult["proposal"] = null;
-    if (overwrites.length > 0) {
-      const summary = overwrites.map(describeChange).join("; ");
-      const duplicate = await tx.tripDetailProposal.findFirst({
-        where: { tripId: trip.id, status: "PENDING", summary },
-        select: { id: true },
-      });
-      if (duplicate) {
-        proposal = { id: duplicate.id, summary, changes: overwrites };
-      } else {
-        const created = await tx.tripDetailProposal.create({
-          data: {
-            tripId: trip.id,
-            conversationId: params.conversationId,
-            proposedById: access.userId,
-            summary,
-            changes: overwrites as unknown as Prisma.InputJsonValue,
-          },
-        });
-        await logActivity(tx, {
-          tripId: trip.id,
-          actorId: access.userId,
-          type: "PROPOSAL_CREATED",
-          summary: `got an Atlas proposal to change the ${describeFields(overwrites.map((change) => change.field))}`,
-          entityType: "proposal",
-          entityId: created.id,
-        });
-        proposal = { id: created.id, summary, changes: overwrites };
-      }
-    }
+    const proposal =
+      overwrites.length > 0
+        ? await createProposalTx(tx, access, overwrites, params.conversationId)
+        : null;
 
     const addedPreferences = await addPreferencesTx(
       tx,
@@ -656,7 +772,7 @@ export async function listPendingProposals(access: TripAccess) {
       createdAt: proposal.createdAt,
       proposedBy: proposal.proposedBy,
       changes: parsed.success
-        ? (parsed.data as FieldChange[]).map((change) => ({
+        ? (parsed.data as ProposalChange[]).map((change) => ({
             ...change,
             label: describeChange(change),
           }))
@@ -682,7 +798,12 @@ export async function resolveProposal(
       const parsed = proposalChangesSchema.safeParse(proposal.changes);
       if (!parsed.success) throw invalid("This proposal is no longer valid.");
       const changes: FieldChange[] = [];
+      let stops: TripStopInput[] | null = null;
       for (const change of parsed.data) {
+        if (change.field === "stops") {
+          stops = change.to;
+          continue;
+        }
         const value = tripDetailsSchema.shape[change.field].safeParse(
           change.to,
         );
@@ -697,9 +818,15 @@ export async function resolveProposal(
       const trip = await tx.trip.findUniqueOrThrow({
         where: { id: access.tripId },
       });
-      const next = applyChanges(tripToDetails(trip), changes);
+      const before = tripToDetails(trip);
+      const next = applyChanges(before, changes);
       const problem = crossFieldProblem(next);
       if (problem) throw invalid(`${problem} Edit the trip details instead.`);
+      if (stops) {
+        const stopProblem = stopListProblem(stops, next);
+        if (stopProblem)
+          throw invalid(`${stopProblem} Edit the stops instead.`);
+      }
       const data = detailsToTripData(
         Object.fromEntries(changes.map((change) => [change.field, change.to])),
       );
@@ -712,6 +839,14 @@ export async function resolveProposal(
         },
       });
       if (result.count !== 1) throw conflict();
+      if (stops) await replaceStopsTx(tx, trip.id, stops);
+      else
+        await syncDestinationStopTx(
+          tx,
+          trip.id,
+          before.destination,
+          next.destination,
+        );
     }
 
     await tx.tripDetailProposal.update({
@@ -731,4 +866,39 @@ export async function resolveProposal(
       entityId: proposal.id,
     });
   });
+}
+
+/**
+ * The trip as Atlas reads it: details, stops, preferences, and destination ideas, in the same
+ * shape as a creation draft.
+ */
+export async function loadTripDraft(access: TripAccess): Promise<TripDraft> {
+  const [trip, preferences, candidates, stops] = await Promise.all([
+    db.trip.findUniqueOrThrow({ where: { id: access.tripId } }),
+    db.tripPreference.findMany({
+      where: { tripId: access.tripId },
+      select: { kind: true, strength: true, description: true },
+      take: 40,
+    }),
+    db.researchOption.findMany({
+      where: {
+        tripId: access.tripId,
+        category: "DESTINATION",
+        status: { notIn: ["REJECTED", "CANCELLED"] },
+      },
+      select: { title: true, rationale: true, origin: true },
+      take: 12,
+    }),
+    loadStops(db, access.tripId),
+  ]);
+  return {
+    details: tripToDetails(trip),
+    stops,
+    preferences,
+    candidateDestinations: candidates.map((candidate) => ({
+      name: candidate.title,
+      reason: candidate.rationale,
+      suggestedBy: candidate.origin === "ATLAS" ? "atlas" : "user",
+    })),
+  };
 }

@@ -78,7 +78,11 @@ const ORDER: Record<TripStartMode, DetailTopic[]> = {
 export function knownTopics(draft: TripDraft): Set<DetailTopic> {
   const d = draft.details;
   const known = new Set<DetailTopic>();
-  if (d.destination || draft.candidateDestinations.length > 0)
+  if (
+    d.destination ||
+    draft.candidateDestinations.length > 0 ||
+    draft.stops.length > 0
+  )
     known.add("destination");
   if (d.tripStyle) known.add("vibe");
   if (

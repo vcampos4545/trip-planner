@@ -1,12 +1,18 @@
 import { Banknote, CalendarDays, Luggage, MapPin, Users } from "lucide-react";
 
 import { formatDateRange } from "@/lib/dates";
+import {
+  describeAirports,
+  describeStop,
+  type TripStopInput,
+} from "@/lib/domain/stops";
 import type { TripDetails } from "@/lib/domain/trip-details";
 import {
   ARRANGEMENT_LABELS,
   BUDGET_BASIS_LABELS,
   BUDGET_COMPONENT_LABELS,
   DATE_FLEXIBILITY_LABELS,
+  TRIP_THEME_LABELS,
 } from "@/lib/labels";
 import { formatMoneyValue } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -54,10 +60,12 @@ export function TripDetailsSummary({
   details,
   candidateDestinations = [],
   preferences = [],
+  stops = [],
   className,
 }: {
   details: TripDetails;
   candidateDestinations?: { name: string; reason: string | null }[];
+  stops?: TripStopInput[];
   preferences?: { kind: string; strength: string; description: string }[];
   className?: string;
 }) {
@@ -78,6 +86,20 @@ export function TripDetailsSummary({
             <Unknown>Not decided</Unknown>
           )}
         </Row>
+        {stops.length > 1 ||
+        (stops.length === 1 &&
+          stops[0]!.name.toLowerCase() !==
+            details.destination?.toLowerCase()) ? (
+          <Row label="Stops">
+            <ol className="space-y-0.5" data-testid="summary-stops">
+              {stops.map((stop, index) => (
+                <li key={`${stop.name}-${index}`}>
+                  {index + 1}. {describeStop(stop)}
+                </li>
+              ))}
+            </ol>
+          </Row>
+        ) : null}
         {candidateDestinations.length > 0 ? (
           <Row label="Ideas">
             {candidateDestinations
@@ -86,9 +108,17 @@ export function TripDetailsSummary({
           </Row>
         ) : null}
         <Row label="Trip style">{details.tripStyle ?? <Unknown />}</Row>
+        <Row label="Theme">
+          {details.theme ? TRIP_THEME_LABELS[details.theme] : <Unknown />}
+        </Row>
         <Row label="Leaving from">
           {details.departureLocation ?? <Unknown />}
         </Row>
+        {details.flyIntoAirport || details.flyOutOfAirport ? (
+          <Row label="Flying">
+            {describeAirports(details.flyIntoAirport, details.flyOutOfAirport)}
+          </Row>
+        ) : null}
       </Group>
       <Group icon={CalendarDays} title="When">
         <Row label="Dates">{dates ?? <Unknown>Not set</Unknown>}</Row>

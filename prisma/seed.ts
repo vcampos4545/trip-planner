@@ -79,6 +79,16 @@ async function main() {
       currency: "USD",
       createdById: alex.id,
       updatedById: alex.id,
+      stops: {
+        create: [
+          {
+            position: 0,
+            name: "Lisbon, Portugal",
+            startDate: date("2027-05-20"),
+            endDate: date("2027-05-23"),
+          },
+        ],
+      },
     },
   });
 

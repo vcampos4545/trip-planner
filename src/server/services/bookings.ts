@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { Prisma } from "@/generated/prisma/client";
+import type { BookingCategory } from "@/generated/prisma/enums";
 import { parseDateOnly } from "@/lib/dates";
 import { BOOKING_STATUS_LABELS } from "@/lib/labels";
 import type { BookingInput } from "@/lib/validation/booking";
@@ -302,5 +303,89 @@ export async function setOwnParticipation(
       entityType: "booking",
       entityId: booking.id,
     });
+  });
+}
+
+/**
+ * A booking that already stands for the same thing: the record saved from the same flight result,
+ * or one with the same category, title, and start date. Used so telling Atlas about a purchase
+ * twice, or buying a flight someone was considering, updates that record instead of adding one.
+ */
+export async function findExistingBooking(
+  access: TripAccess,
+  params: {
+    category: BookingCategory;
+    title: string;
+    startDate: string | null;
+    offerId: string | null;
+  },
+) {
+  if (params.offerId) {
+    const fromOffer = await db.booking.findFirst({
+      where: {
+        tripId: access.tripId,
+        category: params.category,
+        status: { not: "CANCELLED" },
+        researchOption: {
+          providerPayload: { path: ["offerId"], equals: params.offerId },
+        },
+      },
+      select: { id: true, title: true },
+    });
+    if (fromOffer) return fromOffer;
+  }
+  return db.booking.findFirst({
+    where: {
+      tripId: access.tripId,
+      category: params.category,
+      status: { not: "CANCELLED" },
+      title: { equals: params.title, mode: "insensitive" },
+      startDate: params.startDate ? parseDateOnly(params.startDate) : null,
+    },
+    select: { id: true, title: true },
+  });
+}
+
+/**
+ * Marks travelers as booked on an existing record, for example when someone who was considering a
+ * flight says they bought it. A booking that was "not booked yet" becomes booked. Nothing here
+ * marks a booking as confirmed with the provider.
+ */
+export async function recordTravelersBooked(
+  access: TripAccess,
+  bookingId: string,
+  memberIds: string[],
+) {
+  await db.$transaction(async (tx) => {
+    const booking = await tx.booking.findFirst({
+      where: { id: bookingId, tripId: access.tripId },
+    });
+    if (!booking) throw notFound();
+    await requireMembersOfTrip(access.tripId, memberIds, tx);
+    for (const memberId of memberIds) {
+      await tx.bookingParticipant.upsert({
+        where: { bookingId_memberId: { bookingId: booking.id, memberId } },
+        create: { bookingId: booking.id, memberId, status: "BOOKED" },
+        update: { status: "BOOKED" },
+      });
+    }
+    const status = booking.status === "PLANNED" ? "BOOKED" : booking.status;
+    await tx.booking.update({
+      where: { id: booking.id },
+      data: {
+        status,
+        version: { increment: 1 },
+        updatedById: access.userId,
+      },
+    });
+    await logActivity(tx, {
+      tripId: access.tripId,
+      actorId: access.userId,
+      type: "BOOKING_UPDATED",
+      summary: `marked "${booking.title}" as booked`,
+      entityType: "booking",
+      entityId: booking.id,
+    });
+    await syncLinkedOption(tx, access, { ...booking, status });
   });
 }

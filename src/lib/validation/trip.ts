@@ -8,7 +8,10 @@ import {
   PreferenceKind,
   PreferenceStrength,
   TripStage,
+  TripTheme,
 } from "@/generated/prisma/enums";
+
+import { MAX_STOPS } from "@/lib/domain/stops";
 
 import {
   optionalCurrency,
@@ -27,7 +30,12 @@ export const tripDetailsFormSchema = z
     destination: optionalText(160),
     destinationConfirmed: z.boolean(),
     departureLocation: optionalText(160),
+    flyIntoAirport: optionalText(160),
+    flyOutOfAirport: optionalText(160),
     tripStyle: optionalText(300),
+    theme: z
+      .enum([...Object.values(TripTheme), ""])
+      .transform((value) => (value === "" ? null : value)),
     startDate: optionalDate,
     endDate: optionalDate,
     dateFlexibility: z.enum(DateFlexibility),
@@ -97,3 +105,35 @@ export const preferenceFormSchema = z.object({
 });
 
 export type PreferenceFormInput = z.input<typeof preferenceFormSchema>;
+
+/** The route editor: ordered stops with optional dates, plus the airports people fly through. */
+export const tripRouteFormSchema = z
+  .object({
+    flyIntoAirport: optionalText(160),
+    flyOutOfAirport: optionalText(160),
+    stops: z
+      .array(
+        z.object({
+          name: requiredText(120, "Place").refine(
+            (value) => value.length >= 2,
+            "Use at least 2 characters",
+          ),
+          startDate: optionalDate,
+          endDate: optionalDate,
+        }),
+      )
+      .max(MAX_STOPS, `A trip can have up to ${MAX_STOPS} stops`),
+  })
+  .superRefine((value, ctx) => {
+    value.stops.forEach((stop, index) => {
+      if (stop.startDate && stop.endDate && stop.endDate < stop.startDate) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["stops", index, "endDate"],
+          message: "Leave on or after you arrive",
+        });
+      }
+    });
+  });
+
+export type TripRouteFormInput = z.input<typeof tripRouteFormSchema>;

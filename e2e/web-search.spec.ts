@@ -12,8 +12,10 @@ test("Web search: Atlas cites live results and saves one with its source, price,
   await page.goto(`/trips/${tripId}/options`);
   await expect(page.getByText("Live research is unavailable")).toHaveCount(0);
 
-  await page.goto(`/trips/${tripId}/plan`);
+  await page.getByRole("button", { name: "Ask Atlas", exact: true }).click();
+  await page.getByRole("button", { name: "Where Atlas works from" }).click();
   await expect(page.getByText("Live search: OpenAI web search")).toBeVisible();
+  await page.keyboard.press("Escape");
   await page
     .getByRole("textbox", { name: "Message" })
     .fill("Use live search for hotels near the Pantheon and save the first");

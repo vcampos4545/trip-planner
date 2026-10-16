@@ -35,7 +35,7 @@ export default async function NewTripConversationPage({
     },
   );
   if (conversation.tripId)
-    redirect(`/trips/${conversation.tripId}/plan` as Route);
+    redirect(`/trips/${conversation.tripId}?atlas=open` as Route);
 
   const mode =
     conversation.startMode && conversation.startMode !== "MANUAL"
@@ -93,6 +93,7 @@ export default async function NewTripConversationPage({
           </div>
           <TripDetailsSummary
             details={draft.details}
+            stops={draft.stops}
             candidateDestinations={draft.candidateDestinations}
             preferences={draft.preferences}
           />

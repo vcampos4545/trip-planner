@@ -19,8 +19,11 @@ test("Flow G: flight search shows labelled Duffel test data, saves with provenan
     endDate,
   });
 
-  // 1. The panel is prefilled from the trip.
+  // 1. The panel sits in Bookings > Flights and is prefilled from the trip. Options points to it.
   await page.goto(`/trips/${tripId}/options`);
+  await expect(page.getByTestId("flight-search-panel")).toHaveCount(0);
+  await page.getByRole("link", { name: "Search flights in Bookings" }).click();
+  await page.waitForURL(/\/bookings#flights$/);
   const panel = page.getByTestId("flight-search-panel");
   await expect(panel).toContainText("Test data");
   await expect(panel.getByLabel("To", { exact: true })).toHaveValue("Lisbon");
@@ -55,28 +58,16 @@ test("Flow G: flight search shows labelled Duffel test data, saves with provenan
     panel.getByRole("link", { name: /Compare this route on Google Flights/ }),
   ).toHaveAttribute("href", /google\.com\/travel\/flights/);
 
-  // 3. Save one as an option; it keeps its source, price, and retrieval time.
-  await cheapest.getByRole("button", { name: "Save to options" }).click();
+  // 3. Save one to options only; it keeps its source, price, and retrieval time.
+  await cheapest.getByRole("button", { name: "Save to options only" }).click();
   await expect(
     page.getByText("Saved to options for the group to review."),
   ).toBeVisible();
-  const card = page
-    .getByTestId("option-card")
-    .filter({ hasText: "Duffel Airways" });
-  await expect(card).toContainText("Suggested");
-  await expect(card).toContainText("$864.20");
-  await expect(card).toContainText(
-    "Duffel test data: not real fares or availability",
-  );
-  await expect(card).toContainText("retrieved");
-  await expect(
-    card.getByRole("link", { name: /Duffel \(test data\)/ }),
-  ).toBeVisible();
 
-  // 4. Track the other one as considering: a booking record, not a booking.
+  // 4. Save the other as considering: a booking record, not a booking.
   await results
     .nth(1)
-    .getByRole("button", { name: "Save and track as considering" })
+    .getByRole("button", { name: "Save as considering" })
     .click();
   await expect(page.getByText(/You're marked as considering it/)).toBeVisible();
   const bookings = await prisma.booking.findMany({
@@ -93,13 +84,27 @@ test("Flow G: flight search shows labelled Duffel test data, saves with provenan
   await expect(booking).toContainText("Not booked yet");
   await expect(booking).toContainText("considering");
 
+  await page.goto(`/trips/${tripId}/options`);
+  const card = page
+    .getByTestId("option-card")
+    .filter({ hasText: "Duffel Airways" })
+    .filter({ hasText: "$864.20" });
+  await expect(card).toContainText("Suggested");
+  await expect(card).toContainText(
+    "Duffel test data: not real fares or availability",
+  );
+  await expect(card).toContainText("retrieved");
+  await expect(
+    card.getByRole("link", { name: /Duffel \(test data\)/ }),
+  ).toBeVisible();
+
   // 5. A provider error shows a useful message and changes nothing.
   const before = await Promise.all([
     prisma.researchOption.count({ where: { tripId } }),
     prisma.booking.count({ where: { tripId } }),
     prisma.activityLog.count({ where: { tripId } }),
   ]);
-  await page.goto(`/trips/${tripId}/options`);
+  await page.goto(`/trips/${tripId}/bookings`);
   await panel.getByLabel("From", { exact: true }).fill("JFK");
   await panel.getByLabel("To", { exact: true }).fill("ERR");
   await panel.getByRole("button", { name: "Search flights" }).click();
@@ -115,10 +120,12 @@ test("Flow G: flight search shows labelled Duffel test data, saves with provenan
   expect(after).toEqual(before);
 
   // 6. Atlas uses the same search, answers from its results, and labels them as test data.
-  await page.goto(`/trips/${tripId}/plan`);
+  await page.getByRole("button", { name: "Ask Atlas", exact: true }).click();
+  await page.getByRole("button", { name: "Where Atlas works from" }).click();
   await expect(page.getByTestId("flight-search-status")).toContainText(
     "Flight search: Duffel (test data)",
   );
+  await page.keyboard.press("Escape");
   await page
     .getByRole("textbox", { name: "Message" })
     .fill("Can you find flights from JFK for the start of the trip?");

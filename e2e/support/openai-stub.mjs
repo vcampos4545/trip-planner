@@ -19,7 +19,10 @@ const DETAIL_KEYS = [
   "destination",
   "destinationConfirmed",
   "departureLocation",
+  "flyIntoAirport",
+  "flyOutOfAirport",
   "tripStyle",
+  "theme",
   "startDate",
   "endDate",
   "dateFlexibility",
@@ -191,10 +194,205 @@ function isWebSearchRequestValid(body) {
   );
 }
 
+/** Full record_booking arguments, as a strict-mode model sends them. */
+function booking(values) {
+  return {
+    category: "FLIGHT",
+    travelers: [],
+    fromShownFlight: null,
+    title: null,
+    provider: null,
+    reference: null,
+    fromLocation: null,
+    toLocation: null,
+    startDate: null,
+    startTime: null,
+    endDate: null,
+    endTime: null,
+    costAmount: null,
+    currency: null,
+    costPerPerson: null,
+    notes: null,
+    ...values,
+  };
+}
+
+function shownFlight(values) {
+  return {
+    resultId: null,
+    airline: null,
+    flightNumber: null,
+    date: null,
+    departureTime: null,
+    arrivalTime: null,
+    origin: null,
+    destination: null,
+    leg: null,
+    ...values,
+  };
+}
+
+function stop(values) {
+  return {
+    action: "add",
+    newName: null,
+    startDate: null,
+    endDate: null,
+    position: null,
+    ...values,
+  };
+}
+
+/** "2:59pm" -> "14:59" */
+function clock(hour, minute, meridiem) {
+  let h = Number(hour) % 12;
+  if (meridiem === "pm") h += 12;
+  return `${String(h).padStart(2, "0")}:${minute ?? "00"}`;
+}
+
+/** The Park City trip: a multi-stop ski trip, a friend's rides, and flights bought after searches. */
+function parkCity(lower) {
+  if (lower.includes("jackson hole and then park city")) {
+    return [
+      functionCall("update_trip_details", {
+        changes: changes({
+          destination: "Park City",
+          departureLocation: "NYC",
+          flyIntoAirport: "SLC",
+          flyOutOfAirport: "SLC",
+          startDate: "2027-02-27",
+          endDate: "2027-03-07",
+          dateFlexibility: "FIXED",
+          groupSize: 1,
+        }),
+        preferences: [],
+        candidateDestinations: [],
+      }),
+      functionCall("update_trip_stops", {
+        changes: [
+          stop({
+            name: "Jackson Hole",
+            startDate: "2027-02-27",
+            endDate: "2027-03-02",
+          }),
+          stop({
+            name: "Park City",
+            startDate: "2027-03-02",
+            endDate: "2027-03-07",
+          }),
+        ],
+      }),
+    ];
+  }
+  if (lower.includes("we're skiing")) {
+    return [
+      functionCall("update_trip_details", {
+        changes: changes({ theme: "SKI", title: "Out West ski trip" }),
+        preferences: [],
+        candidateDestinations: [],
+      }),
+      functionCall("suggest_theme_tasks", { theme: "SKI" }),
+    ];
+  }
+  if (lower.includes("friend is driving me")) {
+    return [
+      functionCall(
+        "record_booking",
+        booking({
+          category: "GROUND_TRANSPORT",
+          provider: "Friend driving",
+          fromLocation: "Salt Lake City",
+          toLocation: "Jackson Hole",
+          startDate: "2027-02-27",
+        }),
+      ),
+      functionCall(
+        "record_booking",
+        booking({
+          category: "GROUND_TRANSPORT",
+          provider: "Friend driving",
+          fromLocation: "Jackson Hole",
+          toLocation: "Park City",
+          startDate: "2027-03-02",
+        }),
+      ),
+    ];
+  }
+  const route =
+    /flights (?:home )?from (\w{3}) to (\w{3}) on (feb 27|mar 7)/.exec(lower);
+  if (route) {
+    return [
+      functionCall("search_flights", {
+        origin: route[1].toUpperCase(),
+        destination: route[2].toUpperCase(),
+        departureDate: route[3] === "feb 27" ? "2027-02-27" : "2027-03-07",
+        returnDate: null,
+        passengers: null,
+        cabin: null,
+        maxStops: null,
+      }),
+    ];
+  }
+  const bought = /i bought the (\w+) flight/.exec(lower);
+  if (bought) {
+    const lands = /lands at (\d{1,2})(?::(\d{2}))?\s*(am|pm)/.exec(lower);
+    return [
+      functionCall(
+        "record_booking",
+        booking({
+          fromShownFlight: shownFlight({
+            airline: bought[1].charAt(0).toUpperCase() + bought[1].slice(1),
+            arrivalTime: lands ? clock(lands[1], lands[2], lands[3]) : null,
+          }),
+        }),
+      ),
+    ];
+  }
+  return null;
+}
+
+/** Replies for the Park City conversation, written only from tool results. */
+function parkCityReply(lower, outputs) {
+  const results = outputs
+    .filter((output) => output.ok)
+    .map((output) => output.result);
+  if (lower.includes("jackson hole and then park city")) {
+    const asks = results.some((result) =>
+      String(result?.theme ?? "").includes("Is this a ski trip?"),
+    );
+    return `Got it: Jackson Hole, then Park City, flying in and out of Salt Lake City.${asks ? " Is this a ski trip?" : ""}`;
+  }
+  if (lower.includes("we're skiing")) {
+    const tasks = results.find((result) => Array.isArray(result?.suggested));
+    return `A ski trip it is. I suggested calling it Out West ski trip; accept it below if you like it.${tasks?.suggested?.length ? ` I also suggested ${tasks.suggested.length} ski tasks for you to review.` : ""}`;
+  }
+  if (lower.includes("friend is driving me")) {
+    const recorded = results.filter((result) => result?.recorded).length;
+    return `I added ${recorded} rides with your friend to Bookings. You can edit or undo them below.`;
+  }
+  const search = results.find((result) => Array.isArray(result?.results));
+  if (search) {
+    return `On ${search.source} I found ${search.results.map((result) => `${result.airline} at ${result.totalPrice}`).join(" and ")}.`;
+  }
+  const recorded = results.find((result) => result?.recorded !== undefined);
+  if (recorded?.recorded) {
+    return `Recorded ${recorded.bookings.map((item) => item.title).join(" and ")} in Bookings as booked for ${recorded.travelers}. It isn't confirmed with the airline; edit or undo it below.`;
+  }
+  if (recorded?.ambiguous) {
+    return `I showed more than one: ${recorded.candidates.map((item) => item.flight).join("; ")}. Which one did you buy?`;
+  }
+  if (recorded?.notFound) {
+    return "I couldn't find that flight in the results I showed. Which airline, date, and times was it?";
+  }
+  return null;
+}
+
 /** Picks tool calls for a fresh user message. */
 function plan(text, instructions) {
   const lower = text.toLowerCase();
   const known = knownDetails(instructions);
+  const trip = parkCity(lower);
+  if (trip) return trip;
   if (lower.includes("live search")) {
     return [
       functionCall("search_options", {
@@ -313,6 +511,8 @@ function followUp(text, outputs) {
 function reply(text, outputs) {
   const lower = text.toLowerCase();
   const failed = outputs.filter((output) => output.ok === false);
+  const trip = parkCity(lower) ? parkCityReply(lower, outputs) : null;
+  if (trip) return trip;
   if (lower.includes("live search")) {
     const search = outputs.find((output) => output.result?.results);
     if (!search) {

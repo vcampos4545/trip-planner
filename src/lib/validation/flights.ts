@@ -51,11 +51,15 @@ export const flightSearchFormSchema = z
 export type FlightSearchFormInput = z.input<typeof flightSearchFormSchema>;
 export type FlightSearchInput = z.output<typeof flightSearchFormSchema>;
 
-/** Prefills the search from what the trip already knows. Past dates are left blank. */
+/**
+ * Prefills the search from what the trip already knows: the airport people fly into when it is
+ * set, otherwise the destination. Past dates are left blank.
+ */
 export function flightSearchDefaults(
   trip: {
     departureLocation: string | null;
     destination: string | null;
+    flyIntoAirport?: string | null;
     startDate: Date | string | null;
     endDate: Date | string | null;
     groupSize: number | null;
@@ -67,7 +71,7 @@ export function flightSearchDefaults(
   const departureDate = start && start >= today ? start : "";
   return {
     origin: trip.departureLocation?.slice(0, 80) ?? "",
-    destination: trip.destination?.slice(0, 80) ?? "",
+    destination: (trip.flyIntoAirport ?? trip.destination)?.slice(0, 80) ?? "",
     departureDate,
     returnDate: departureDate && end >= departureDate ? end : "",
     passengers: String(

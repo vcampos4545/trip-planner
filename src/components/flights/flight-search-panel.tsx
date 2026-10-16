@@ -79,9 +79,9 @@ export function FlightSearchPanel({
     >
       <div className="flex flex-wrap items-center gap-2">
         <PlaneTakeoff className="size-4 text-muted-foreground" aria-hidden />
-        <h2 id="flight-search-heading" className="text-sm font-semibold">
+        <h3 id="flight-search-heading" className="text-sm font-semibold">
           Search flights
-        </h2>
+        </h3>
         {status.configured && status.testMode ? (
           <Pill tone="warning">
             <FlaskConical aria-hidden />
@@ -95,7 +95,8 @@ export function FlightSearchPanel({
             {status.testMode
               ? `Connected to ${status.label}. Results are samples from Duffel's test environment, not real flights, fares, or availability.`
               : `Results from ${status.label}, with prices as Google Flights shows them when retrieved. Prices can change before you book. Searches share a limited monthly quota, so an identical search within a few hours reuses the earlier results.`}{" "}
-            Saving a flight adds it for the group to review. Nothing is booked.
+            Save a flight as considering to track it here with you on it, or to
+            options only. Nothing is booked through the app.
           </p>
           <FlightSearch tripId={tripId} defaults={defaults} />
         </>
@@ -105,7 +106,7 @@ export function FlightSearchPanel({
           <AlertTitle>Flight search is not configured</AlertTitle>
           <AlertDescription>
             {status.reason} There are no flight results, fares, or availability.
-            You can still add flights you find yourself with Add option, and{" "}
+            You can still record flights you find yourself with Add, and{" "}
             {ASSISTANT_NAME} will say the same if you ask about flights.
           </AlertDescription>
         </Alert>
@@ -400,7 +401,7 @@ function FlightResultCard({
         } else {
           toast.success(
             asBooking
-              ? "Saved to options and bookings. You're marked as considering it."
+              ? "Saved to Flights. You're marked as considering it."
               : "Saved to options for the group to review.",
           );
         }
@@ -456,21 +457,18 @@ function FlightResultCard({
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
         <Button
           size="sm"
-          variant="outline"
-          disabled={pending || saved !== null}
-          onClick={() => save(false)}
+          disabled={pending || saved === "booking"}
+          onClick={() => save(true)}
         >
-          {saved ? "Saved to options" : "Save to options"}
+          {saved === "booking" ? "Saved as considering" : "Save as considering"}
         </Button>
         <Button
           size="sm"
           variant="outline"
-          disabled={pending || saved === "booking"}
-          onClick={() => save(true)}
+          disabled={pending || saved !== null}
+          onClick={() => save(false)}
         >
-          {saved === "booking"
-            ? "Tracking as considering"
-            : "Save and track as considering"}
+          {saved ? "Saved to options" : "Save to options only"}
         </Button>
         {offer.bookingUrl ? (
           <a

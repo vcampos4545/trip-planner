@@ -11,8 +11,8 @@ test("Flow D: itinerary items can be added, edited, removed, and Atlas proposals
     endDate: "2027-05-22",
   });
 
-  // 1-2. Create an event; it shows up on the right day and time.
-  await page.goto(`/trips/${tripId}/itinerary`);
+  // 1-2. Create an event; it shows up on the right day and time in the day list.
+  await page.goto(`/trips/${tripId}/itinerary?view=list`);
   await expect(
     page.getByRole("heading", { name: /Day 1 · Thursday, May 20, 2027/ }),
   ).toBeVisible();
@@ -61,23 +61,33 @@ test("Flow D: itinerary items can be added, edited, removed, and Atlas proposals
     .click();
   await expect(page.getByText("Castle and Alfama walk")).toHaveCount(0);
 
-  // 4. Atlas proposes activities from the trip context.
-  await page.getByRole("link", { name: "Plan with AI" }).click();
-  await page
+  // 4. Atlas proposes activities from the trip context, from the panel on this tab.
+  await page.getByRole("button", { name: "Ask Atlas", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Atlas" });
+  await panel
     .getByRole("textbox", { name: "Message" })
     .fill("Can you suggest an activity for a free afternoon?");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await panel.getByRole("button", { name: "Send message" }).click();
   await expect(
-    page.getByText(/I added two ideas for your second day/),
+    panel.getByText(/I added two ideas for your second day/),
   ).toBeVisible();
   await expect(
-    page.getByText(
+    panel.getByText(
       "Suggested for the itinerary: Atlas pick: Tile museum visit",
     ),
   ).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // The week view, the default, shows suggestions apart from the plan.
+  await page.goto(`/trips/${tripId}/itinerary`);
+  const week = page.getByTestId("week-view");
+  await expect(
+    week.locator('[data-testid="calendar-item"][data-status="suggested"]'),
+  ).toHaveCount(2);
 
   // 5-6. Suggestions stay separate until reviewed; accept one, reject the other.
-  await page.getByRole("link", { name: "Itinerary" }).click();
+  await page.getByRole("link", { name: "List" }).click();
+  await page.waitForURL(/view=list$/);
   const suggestions = page.getByTestId("itinerary-suggestions");
   await expect(suggestions.getByTestId("itinerary-suggestion")).toHaveCount(2);
   await expect(suggestions).toContainText(

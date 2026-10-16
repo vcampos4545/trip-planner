@@ -78,7 +78,7 @@ export async function createTripFromConversationAction(
     return toFailure(error);
   }
   revalidateTrip(tripId);
-  redirect(`/trips/${tripId}/plan`);
+  redirect(`/trips/${tripId}?atlas=open`);
 }
 
 export async function updateDraftDetailsAction(

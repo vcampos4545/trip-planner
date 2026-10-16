@@ -18,9 +18,12 @@ export type ProposalView = {
 export function ProposalsCard({
   tripId,
   proposals,
+  solo = false,
 }: {
   tripId: string;
   proposals: ProposalView[];
+  /** The viewer is the only member, so the copy speaks to them instead of a group. */
+  solo?: boolean;
 }) {
   const { run, pending } = useAction();
   if (proposals.length === 0) return null;
@@ -35,11 +38,14 @@ export function ProposalsCard({
         className="flex items-center gap-2 text-sm font-semibold text-amber-950"
       >
         <Sparkles className="size-4" aria-hidden />
-        Proposed changes waiting for confirmation
+        {solo
+          ? "Changes waiting for your OK"
+          : "Proposed changes waiting for confirmation"}
       </h2>
       <p className="mt-1 text-xs text-amber-900/80">
-        {ASSISTANT_NAME} never overwrites details someone already set. Accept to
-        apply a change, or decline to keep things as they are.
+        {ASSISTANT_NAME} never overwrites details {solo ? "you" : "someone"}{" "}
+        already set. Accept to apply a change, or decline to keep things as they
+        are.
       </p>
       <ul className="mt-3 space-y-2">
         {proposals.map((proposal) => (

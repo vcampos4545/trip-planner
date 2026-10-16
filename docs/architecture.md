@@ -38,7 +38,7 @@ The Prisma schema (`prisma/schema.prisma`) is normalized around `Trip`:
 | ------------ | ----------------------------------------------------------------------- |
 | Identity     | `User`, `Account`, `Session`, `VerificationToken` (Auth.js)             |
 | Membership   | `TripMember` (organizer or member), `TripInvitation` (hashed tokens)    |
-| Trip profile | `Trip` (structured details), `TripPreference` (requirement vs. wish)    |
+| Trip profile | `Trip` (details, airports, theme), `TripStop`, `TripPreference`         |
 | Atlas        | `Conversation` (one per user per trip), `Message`, `TripDetailProposal` |
 | Research     | `ResearchOption` (with provenance), `OptionNote`                        |
 | Decisions    | `Decision`, `DecisionChoice`, `Vote` (one per member per decision)      |
@@ -54,11 +54,44 @@ Notes:
 - Calendar dates are `DATE` columns plus minutes after midnight, because itineraries are planned
   in destination local time.
 - JSON is used only for the pre-trip draft on a conversation, proposed patches, message tool
-  summaries, provider payloads, and activity metadata.
+  summaries (including the flight results a reply showed), provider payloads, and activity
+  metadata.
 - Records that several people edit (`Trip`, `Task`, `ResearchOption`, `ItineraryEvent`,
   `Booking`) carry a `version` column. Updates use `updateMany({ where: { id, version } })` and a
   stale version returns a conflict that the UI explains with a reload action.
 - Multi-row changes run in transactions and write an `ActivityLog` entry in the same transaction.
+
+## Trip route: stops and airports
+
+A trip visits an ordered list of `TripStop` rows (place, position, optional start and end date).
+The airports people fly into and home from are `Trip.flyIntoAirport` and `Trip.flyOutOfAirport`,
+kept apart from the stops, so "fly in and out of Salt Lake City, Jackson Hole then Park City" is
+two stops and two airports. `Trip.destination` stays as the headline destination.
+
+- The migration that added stops turned each existing destination into the trip's first stop.
+  New trips get their destination (or the draft's stops) as stops when they are created, and a
+  single undated stop that mirrors the destination follows it when the destination changes
+  (`syncStopsWithDestination` in `src/lib/domain/stops.ts`).
+- `stopListProblem` validates a whole list: names, at most 12 stops, no duplicates, each range in
+  order, inside the trip dates, and stops in travel order.
+- The Stops dialog in the trip header replaces the list and airports in one versioned update
+  (`updateTripRoute`).
+- Atlas sends small operations (add, update, remove, move). `applyStopOps` applies them and
+  `classifyStopChange` decides what happens: adding stops or filling missing dates applies
+  directly; removing, renaming, reordering, or re-dating a stop someone set becomes a proposal
+  with a `stops` change, accepted or declined like other proposals.
+
+## Trip themes
+
+`Trip.theme` (`TripTheme`: ski, beach, outdoors, city, food, event, or none) is set only when the
+group says it. `themeHint` in `src/lib/domain/theme.ts` decides, the same way every time, whether
+Atlas should record a theme the user stated, ask one short question ("Is this a ski trip?") when
+the timing and well-known ski destinations only imply it, or say nothing. The hint is in Atlas's
+instructions and in the results of `update_trip_details` and `update_trip_stops`, so Atlas can ask
+in the same reply that recorded the places and dates. Once a theme is known and the title is one
+the app generated (`isAutomaticTitle`), Atlas proposes a better working title, which the user
+accepts or edits, and `suggest_theme_tasks` adds the theme's usual tasks (`THEME_TASKS`) as
+suggestions.
 
 ## Statuses and what they mean
 
@@ -105,6 +138,9 @@ Defined in `src/server/ai/tools.ts`, each with a Zod schema that doubles as a st
 | --------------------------------- | -------------------------------------------------------------- |
 | `get_trip_state`                  | Read the shared trip record                                    |
 | `update_trip_details`             | Fill unknown details; changes to known values become proposals |
+| `update_trip_stops`               | Add, update, remove, or move stops (see Trip route)            |
+| `record_booking`                  | Record a booking the user says they made, as booked            |
+| `suggest_theme_tasks`             | Suggest the theme's usual tasks, each awaiting review          |
 | `search_options`                  | Query the research provider (only when current info is needed) |
 | `save_research_option`            | Save a suggestion, with provenance if it came from a search    |
 | `list_saved_research`             | Reuse what the group already saved                             |
@@ -126,6 +162,22 @@ Rules enforced in code, not just in the prompt:
   labelled as Atlas ideas. A search result's source, price, and retrieval time are copied from the
   provider's response, never from the model's text.
 - Proposed itinerary items must fall within the trip dates and carry a rationale and caveats.
+- `record_booking` records what the user says they already bought or arranged, for them or a
+  named member, with members resolved by name and anyone else refused. The booking is `BOOKED`
+  with those travelers booked, never `CONFIRMED`, and its notes say it came from the user and was
+  not checked with the provider. A purchase that matches an existing record (the same flight
+  result, or the same category, title, and start date) marks the travelers booked on it instead
+  of adding another. The effect carries the booking ID, so the chat shows **Edit** and, for a new
+  record, **Undo**.
+- Flight results are numbered `f1`, `f2`, ... across the whole conversation, and the results a
+  reply showed are saved in its metadata (`flightResults`). The next turns load the recent ones
+  back, list them in Atlas's instructions, and `record_booking` matches a reference such as
+  "the American flight that lands at 2:59pm" against them in code (`matchShownFlights` in
+  `src/lib/domain/flight-match.ts`). More than one match is returned as ambiguous with the
+  candidates, and nothing is recorded until the user says which.
+- On a trip with one member, proposal effects read "Needs your OK" and the chat shows Accept and
+  Decline under the reply; the instructions tell Atlas never to mention a group. With several
+  members, a proposal waits for any member to accept it on the Overview tab.
 - The UI shows the tool effects under each reply, so what Atlas says it did can be checked against
   what actually happened.
 - When a reply follows live searches, the orchestrator stores the results' titles, URLs, source
@@ -167,7 +219,7 @@ rounds.
 | `openai_web`, no key, or an unknown value | `UnavailableResearchProvider`   | Reports why live research is unavailable         |
 
 A provider that is selected but cannot run never falls back to anything else. The Options tab,
-the Plan tab, and Atlas's instructions all show the reason.
+the Atlas panel's info button, and Atlas's instructions all show the reason.
 
 ### OpenAI web search
 
@@ -215,7 +267,7 @@ Flight search is separate from research providers because it returns structured,
 itineraries rather than pages.
 
 ```
-Options tab panel ──► src/server/actions/flights.ts ──┐
+Bookings > Flights panel ──► src/server/actions/flights.ts ──┐
 Atlas search_flights / search_return_flights tools ───┤
                                                       ▼
      src/server/services/flights.ts (searchFlights, searchReturnFlights, saveFlightOffer)
@@ -309,6 +361,28 @@ To add another provider: implement `FlightSearchProvider`, set `testMode` honest
 `getFlightProvider()`, and wrap it in `CachedFlightProvider` if searches cost quota. Booking would
 be a new service; the app does not execute bookings.
 
+## Atlas panel
+
+Atlas has no tab of its own. The trip layout (`src/app/(app)/trips/[tripId]/layout.tsx`) loads the
+user's conversation for the trip and wraps every tab in `AtlasPanelProvider`
+(`src/components/atlas/atlas-panel.tsx`): an **Ask Atlas** button opens the conversation in a
+slide-over sheet, full width on phones, with the "Try asking" suggestions and a small info button
+for where Atlas works from. `?atlas=open` (with an optional `prompt`) opens it from a link; the old
+`/plan` route redirects there, and trip creation lands on it. Components inside the workspace open
+it with `useAtlasPanel().openAtlas(prompt)`. The pre-trip creation page keeps its own full-page
+chat.
+
+## Itinerary week view
+
+The itinerary opens on a calendar (`src/components/itinerary/week-view.tsx`) with the day list as
+the alternative (`?view=list`). `src/lib/domain/calendar.ts` turns itinerary events and dated
+bookings into calendar items: flights and ground legs at their local times, stays and untimed
+items in the all-day lane, and each booking labelled from its travelers' own statuses (booked,
+considering, or mixed). Overnight items are cut at midnight, overlapping items share the column,
+and all-day items span the days they cover. An event linked to a booking that is already on the
+calendar is shown once. A "Who's flying when" strip lists every traveler's flights. Small screens
+start on a three-day range, with week and single-day ranges available.
+
 ## Financial data (future)
 
 `src/server/financial/provider.ts` documents a `FinancialDataProvider` interface for a future,
@@ -344,3 +418,6 @@ provider tokens are kept, and recommendations rely only on data the provider act
 - Flight search runs through the real Duffel provider pointed at a local stub of Duffel's API
   (`e2e/support/duffel-stub.mjs`), which checks the version header and test token, resolves place
   names, returns test offers, and simulates an outage. No automated test calls the real Duffel API.
+- The SerpApi stub (`e2e/support/serpapi-stub.mjs`) also returns named flights for LGA to SLC and
+  SLC to JFK, which the Park City replay (`e2e/flow-i-serpapi-park-city.spec.ts`) uses to check
+  that flights bought after a search land in Bookings and on the week view.

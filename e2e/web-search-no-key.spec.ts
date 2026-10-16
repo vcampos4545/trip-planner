@@ -14,7 +14,8 @@ test("Web search selected without an API key says live research is unavailable",
     "OpenAI web search is selected but cannot run: RESEARCH_PROVIDER is openai_web, but OPENAI_API_KEY is not set on the server.",
   );
 
-  await page.goto(`/trips/${tripId}/plan`);
+  await page.getByRole("button", { name: "Ask Atlas", exact: true }).click();
+  await page.getByRole("button", { name: "Where Atlas works from" }).click();
   await expect(page.getByText("Live search unavailable")).toBeVisible();
   await expect(page.getByText("Live search: OpenAI web search")).toHaveCount(0);
 });

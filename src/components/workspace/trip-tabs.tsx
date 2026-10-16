@@ -4,7 +4,6 @@ import {
   CalendarRange,
   LayoutDashboard,
   ListChecks,
-  Sparkles,
   Ticket,
   Bookmark,
 } from "lucide-react";
@@ -16,7 +15,6 @@ import { cn } from "@/lib/utils";
 
 const TABS = [
   { segment: "", label: "Overview", icon: LayoutDashboard },
-  { segment: "plan", label: "Plan with AI", icon: Sparkles },
   { segment: "options", label: "Options", icon: Bookmark },
   { segment: "itinerary", label: "Itinerary", icon: CalendarRange },
   { segment: "bookings", label: "Bookings", icon: Ticket },

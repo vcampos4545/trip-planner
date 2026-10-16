@@ -8,6 +8,51 @@ treating each chat as a one-off.
 "Trip Planner" is a placeholder product name. Set `NEXT_PUBLIC_APP_NAME` to change it (see
 [Product name](#product-name)).
 
+## Features
+
+- **Trips with several stops.** A trip is an ordered list of stops, each with optional dates,
+  plus the airports people fly into and home from. "Fly in and out of Salt Lake City, Jackson
+  Hole then Park City" is two stops and two airports. The trip header shows the route, and the
+  **Stops** button edits it directly. Existing trips keep their destination as the first stop.
+- **Atlas, from every tab.** The **Ask Atlas** button opens the trip's conversation in a panel
+  on any tab. Atlas records details, stops, and preferences as you talk, suggests tasks and
+  itinerary items for review, and keeps "Try asking" suggestions above the message box. The
+  small info button shows where Atlas works from and which live sources are connected.
+- **Bookings you tell Atlas about.** Say "I bought the Southwest flight" after a search and
+  Atlas records that exact flight under Bookings > Flights as booked for you, with its times,
+  airports, and flight number. It does the same for a named trip member, a stay, or a ground leg
+  such as a friend driving you between stops. If more than one flight shown earlier fits, Atlas
+  asks which one. Each recorded booking has **Edit** and **Undo** under the reply, and nothing is
+  ever presented as confirmed with the airline.
+- **Trip themes.** Atlas records a theme such as skiing when you say it, and asks "Is this a ski
+  trip?" when only the dates and places suggest it. Once the theme is known it proposes a better
+  working title, such as "Out West ski trip", and suggests the usual tasks (rentals, lift passes,
+  lessons, gear) for you to accept.
+- **One-person trips.** When you are the only member, nothing waits for "the group": a change
+  Atlas proposes to something already set can be accepted or declined right in the chat.
+- **Flight search in Bookings.** Bookings > Flights has the flight search. Saving a result as
+  considering adds a flight booking with you as considering.
+- **Itinerary week view.** The itinerary opens on a calendar week (days as columns, hours as rows,
+  an all-day lane on top). It shows itinerary items, everyone's flights labelled Booked or
+  Considering per traveler, ground legs, and stays, with a "Who's flying when" strip. Phones start
+  on a three-day view; the day-by-day list is one click away.
+- **The rest of the workspace.** Shared details and preferences, saved options with sources and
+  prices, votes, tasks, bookings with several travelers and cost splits, and a budget summary that
+  keeps estimates apart from actual costs.
+
+Screenshots (from the end-to-end test data):
+[Bookings > Flights](docs/screenshots/bookings-flights.png),
+[itinerary week view](docs/screenshots/itinerary-week.png),
+[the same on a phone](docs/screenshots/itinerary-phone.png),
+[the Atlas panel](docs/screenshots/atlas-panel.png), and
+[where Atlas works from](docs/screenshots/atlas-panel-info.png).
+
+Trips that existed before stops and bookings-from-chat: the destination becomes the first stop
+when the migration runs. Flights you only told Atlas about earlier were saved as notes, not
+bookings. Open Atlas and say it again, for example "I bought the Southwest flight from LGA to SLC
+on Feb 27, leaving 6:00 AM and landing 9:45 AM", or search again and say which result you bought,
+and Atlas records it under Bookings > Flights.
+
 ## Stack
 
 Next.js 16 (App Router), React 19, TypeScript 6 (strict), Tailwind CSS 4 with shadcn/ui,
@@ -156,7 +201,7 @@ uses the same `OPENAI_API_KEY`, so there is no extra account.
    RESEARCH_PROVIDER="openai_web"
    ```
 
-3. Restart the app. The Plan with AI tab shows "Live search: OpenAI web search".
+3. Restart the app. The info button in the Atlas panel shows "Live search: OpenAI web search".
 
 Optional settings:
 
@@ -177,8 +222,8 @@ How it behaves:
 - Atlas's replies link the results they use and list them as sources under the reply.
 - Options saved from a search are labelled "Live result".
 - If `RESEARCH_PROVIDER="openai_web"` but `OPENAI_API_KEY` is missing, or `RESEARCH_PROVIDER` has an
-  unknown value, the Options and Plan tabs say live research is unavailable and why. If a search
-  fails, Atlas shows "Live research failed" and nothing is saved.
+  unknown value, the Options tab and the Atlas panel's info button say live research is
+  unavailable and why. If a search fails, Atlas shows "Live research failed" and nothing is saved.
 
 Cost: OpenAI bills each web search tool call (about $10 per 1,000 calls at the time of writing)
 plus the search content tokens at the model's token rates. Check
@@ -186,7 +231,7 @@ https://developers.openai.com/api/docs/pricing for current prices.
 
 ## Flight search
 
-The Options tab has a flight search panel, and Atlas has `search_flights` and
+Bookings > Flights has a flight search panel, and Atlas has `search_flights` and
 `search_return_flights` tools that use the same service. Two providers are available, picked with
 `FLIGHT_PROVIDER`:
 
@@ -204,7 +249,7 @@ The Options tab has a flight search panel, and Atlas has `search_flights` and
    SERPAPI_API_KEY="..."
    ```
 
-The Plan with AI tab then shows "Flight search: Google Flights via SerpApi".
+The info button in the Atlas panel then shows "Flight search: Google Flights via SerpApi".
 
 Quota: the free plan allows about 250 searches a month and 50 an hour (check your plan at
 https://serpapi.com/pricing). Paid plans have no pay-as-you-go overage, so when the quota runs out,
@@ -252,14 +297,17 @@ data. If Atlas leaves that out, the app adds the notice to the reply. Live token
 
 ### With either provider
 
-- The search is prefilled from the trip's departure city, destination, dates, and group size. You
-  can type a city name or a 3-letter airport code.
+- The search is prefilled from the trip's departure city, the airport people fly into (or the
+  destination), dates, and group size. You can type a city name or a 3-letter airport code.
 - Results show the airline, local departure and arrival times, stops, duration, total price and
   currency for all travelers, source, and retrieval time.
-- **Save to options** adds the flight as a suggestion with its source, price, link, and retrieval
-  time. **Save and track as considering** also adds a flight booking record that is "Not booked
-  yet" with you marked as considering. Nothing is ever marked booked, and the app never books or
-  pays for flights. A round trip saved before its return is chosen says so in its description.
+- **Save as considering** adds a flight booking record that is "Not booked yet" with you marked
+  as considering, plus the flight as an option with its source, price, link, and retrieval time.
+  **Save to options only** keeps just the option. Searching never marks anything booked, and the
+  app never books or pays for flights. When you buy one, click **I booked this** on the booking
+  or tell Atlas. A round trip saved before its return is chosen says so in its description.
+- Atlas keeps the results it showed in a conversation, so you can say which one you bought a few
+  messages later.
 - Without a key or token, the panel and Atlas say flight search is not configured.
 
 ## Environment variables
@@ -317,9 +365,11 @@ Only `NEXT_PUBLIC_APP_NAME` reaches the browser. Everything else stays on the se
 - `pnpm test` runs two Vitest projects. `unit` covers pure logic (budget math, trip-detail
   patching, follow-up priorities, lifecycle rules, schemas, the OpenAI request mapping and the
   OpenAI web search provider, and the SerpApi and Duffel flight providers and the flight search
-  cache against mocked clients). `integration` runs against `trip_planner_test` and covers
-  authorization, invitations, concurrency, saving flights, the database search cache, and the
-  Atlas orchestrator with a scripted provider.
+  cache against mocked clients, stop changes and validation, the theme question, matching a
+  purchase to flights shown earlier, and the calendar layout). `integration` runs against
+  `trip_planner_test` and covers authorization, invitations, concurrency, saving flights, the
+  database search cache, and the Atlas orchestrator with a scripted provider, including a replay
+  of a multi-stop ski trip with a friend's rides and flights bought after earlier searches.
 - `pnpm test:e2e` runs Playwright against a production build and the test database. Install the
   browser once with `pnpm exec playwright install chromium`. It starts eight local processes on
   ports 3310 to 3314 and 3317 to 3319: the app with Atlas pointed at a local OpenAI stub and flight
@@ -328,7 +378,9 @@ Only `NEXT_PUBLIC_APP_NAME` reaches the browser. Everything else stays on the se
   (3313), the app with Atlas and flight search pointed at a local SerpApi stub (3314), the SerpApi
   stub (3317), the Duffel stub (3318), and the OpenAI stub (3319). No test calls the real OpenAI,
   SerpApi, or Duffel API. Test users get sessions inserted directly into the test database; the app
-  has no test-only sign-in route.
+  has no test-only sign-in route. Flow I replays the Park City trip end to end through the stubs
+  and checks Bookings > Flights, the week view, and that nothing mentions a group on a one-person
+  trip.
 
 Both suites refuse to run against a database whose name does not end in `_test`.
 

@@ -33,6 +33,78 @@ const PLACES = {
 
 const stats = { google_flights: 0, google_flights_autocomplete: 0 };
 
+const CITIES = {
+  JFK: "New York",
+  LGA: "New York",
+  EWR: "New York",
+  LIS: "Lisbon",
+  SLC: "Salt Lake City",
+};
+
+/** A nonstop flight with exact local times, for routes the Park City test uses. */
+function flight(from, to, date, departs, arrives, airline, number) {
+  return {
+    departure_airport: {
+      name: `${from} Airport`,
+      id: from,
+      time: `${date} ${departs}`,
+    },
+    arrival_airport: {
+      name: `${to} Airport`,
+      id: to,
+      time: `${date} ${arrives}`,
+    },
+    duration: 240,
+    airplane: "Boeing 737",
+    airline,
+    airline_logo: "https://www.gstatic.com/flights/airline_logos/70px/ZZ.png",
+    travel_class: "Economy",
+    flight_number: number,
+    legroom: "31 in",
+    extensions: [],
+  };
+}
+
+/** Southwest and Delta out of LaGuardia, and two American flights home from Salt Lake City. */
+function namedRoute(from, to, date, adults) {
+  const oneWay = (id) => ({ booking_token: `book_${id}` });
+  if (from === "LGA" && to === "SLC") {
+    return {
+      best_flights: [
+        item(
+          flight(from, to, date, "06:00", "09:45", "Southwest", "WN 1234"),
+          189 * adults,
+          oneWay("wn"),
+        ),
+      ],
+      other_flights: [
+        item(
+          flight(from, to, date, "08:15", "11:40", "Delta", "DL 455"),
+          246 * adults,
+          oneWay("dl"),
+        ),
+      ],
+    };
+  }
+  if (from === "SLC" && to === "JFK") {
+    return {
+      best_flights: [
+        item(
+          flight(from, to, date, "07:05", "14:59", "American", "AA 2210"),
+          212 * adults,
+          oneWay("aa_early"),
+        ),
+        item(
+          flight(from, to, date, "12:30", "20:31", "American", "AA 1880"),
+          198 * adults,
+          oneWay("aa_late"),
+        ),
+      ],
+    };
+  }
+  return null;
+}
+
 function leg(from, to, date, hour, flightNumber) {
   const pad = (value) => String(value).padStart(2, "0");
   return {
@@ -85,6 +157,25 @@ function flights(params) {
         item(leg(to, from, back, 16, "ZZ 203"), 610 * adults, {
           booking_token: "book_2",
         }),
+      ],
+    };
+  }
+  const named = namedRoute(from, to, outbound, adults);
+  if (named) {
+    return {
+      ...named,
+      airports: [
+        {
+          departure: [
+            {
+              airport: { id: from, name: `${from} Airport` },
+              city: CITIES[from],
+            },
+          ],
+          arrival: [
+            { airport: { id: to, name: `${to} Airport` }, city: CITIES[to] },
+          ],
+        },
       ],
     };
   }

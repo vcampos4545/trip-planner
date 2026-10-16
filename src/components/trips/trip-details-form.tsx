@@ -18,6 +18,7 @@ import {
   BudgetBasis,
   BudgetComponent,
   DateFlexibility,
+  TripTheme,
 } from "@/generated/prisma/enums";
 import { useZodForm } from "@/hooks/use-zod-form";
 import type { ActionResult } from "@/lib/action-result";
@@ -26,6 +27,7 @@ import {
   BUDGET_BASIS_LABELS,
   BUDGET_COMPONENT_LABELS,
   DATE_FLEXIBILITY_LABELS,
+  TRIP_THEME_LABELS,
 } from "@/lib/labels";
 import {
   tripDetailsFormSchema,
@@ -62,7 +64,10 @@ export function TripDetailsForm({
     destination: useFieldId("destination"),
     confirmed: useFieldId("confirmed"),
     departure: useFieldId("departure"),
+    flyInto: useFieldId("flyInto"),
+    flyOutOf: useFieldId("flyOutOf"),
     style: useFieldId("style"),
+    theme: useFieldId("theme"),
     start: useFieldId("start"),
     end: useFieldId("end"),
     flexibility: useFieldId("flexibility"),
@@ -151,18 +156,57 @@ export function TripDetailsForm({
             </label>
           )}
         />
-        <FieldShell
-          label="Trip style or vibe"
-          htmlFor={id.style}
-          optional
-          error={errors.tripStyle?.message}
-        >
-          <Input
-            id={id.style}
-            placeholder="Beaches, food, slow mornings"
-            {...form.register("tripStyle")}
-          />
-        </FieldShell>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <FieldShell
+            label="Flying into"
+            htmlFor={id.flyInto}
+            optional
+            hint="Airport where people land, if not the destination"
+            error={errors.flyIntoAirport?.message}
+          >
+            <Input
+              id={id.flyInto}
+              placeholder="SLC"
+              {...form.register("flyIntoAirport")}
+            />
+          </FieldShell>
+          <FieldShell
+            label="Flying home from"
+            htmlFor={id.flyOutOf}
+            optional
+            error={errors.flyOutOfAirport?.message}
+          >
+            <Input
+              id={id.flyOutOf}
+              placeholder="SLC"
+              {...form.register("flyOutOfAirport")}
+            />
+          </FieldShell>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-[1fr_12rem]">
+          <FieldShell
+            label="Trip style or vibe"
+            htmlFor={id.style}
+            optional
+            error={errors.tripStyle?.message}
+          >
+            <Input
+              id={id.style}
+              placeholder="Beaches, food, slow mornings"
+              {...form.register("tripStyle")}
+            />
+          </FieldShell>
+          <FieldShell label="Theme" htmlFor={id.theme} optional>
+            <NativeSelect id={id.theme} {...form.register("theme")}>
+              <option value="">Not set</option>
+              {Object.values(TripTheme).map((value) => (
+                <option key={value} value={value}>
+                  {TRIP_THEME_LABELS[value]}
+                </option>
+              ))}
+            </NativeSelect>
+          </FieldShell>
+        </div>
       </fieldset>
 
       <fieldset className="grid gap-3">

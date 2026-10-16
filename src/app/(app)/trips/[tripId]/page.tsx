@@ -17,6 +17,7 @@ import { inviteDefaultTtlDays } from "@/server/config";
 import { db } from "@/server/db";
 import { orNotFound } from "@/server/not-found";
 import { listRecentActivity } from "@/server/services/activity";
+import { listStops } from "@/server/services/stops";
 import { listInvitations, listMembers } from "@/server/services/members";
 import {
   getTripDetails,
@@ -46,6 +47,7 @@ export default async function TripOverviewPage({
     unassignedTasks,
     bookings,
     candidates,
+    stops,
   ] = await Promise.all([
     getTripDetails(access),
     getTripProgress(access),
@@ -95,6 +97,7 @@ export default async function TripOverviewPage({
       select: { title: true, rationale: true },
       take: 8,
     }),
+    listStops(access),
   ]);
 
   const budget = summarizeBudget(
@@ -110,6 +113,7 @@ export default async function TripOverviewPage({
         <NextStepCard tripId={tripId} action={nextAction(progress)} />
         <ProposalsCard
           tripId={tripId}
+          solo={members.length === 1}
           proposals={proposals.map((proposal) => ({
             id: proposal.id,
             createdAt: proposal.createdAt.toISOString(),
@@ -137,6 +141,7 @@ export default async function TripOverviewPage({
             )}
             <TripDetailsSummary
               details={details}
+              stops={stops}
               candidateDestinations={candidates.map((candidate) => ({
                 name: candidate.title,
                 reason: candidate.rationale,

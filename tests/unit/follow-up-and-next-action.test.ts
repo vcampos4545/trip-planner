@@ -43,6 +43,14 @@ describe("nextTopics", () => {
     expect(known.has("destination")).toBe(true);
     expect(known.has("timing")).toBe(true);
   });
+
+  it("counts stops as knowing where the trip goes", () => {
+    const known = knownTopics({
+      ...EMPTY_DRAFT,
+      stops: [{ name: "Jackson Hole", startDate: null, endDate: null }],
+    });
+    expect(known.has("destination")).toBe(true);
+  });
 });
 
 const BASE: TripProgress = {

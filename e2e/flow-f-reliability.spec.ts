@@ -12,7 +12,9 @@ test("Flow F: provider outages and invalid AI output give clear feedback and lea
   });
   const before = await prisma.trip.findUniqueOrThrow({ where: { id: tripId } });
 
+  // The old Plan with AI address opens the Atlas panel.
   await page.goto(`/trips/${tripId}/plan`);
+  await expect(page.getByRole("dialog", { name: "Atlas" })).toBeVisible();
   await page
     .getByRole("textbox", { name: "Message" })
     .fill("simulate outage please");
@@ -61,6 +63,7 @@ test("Flow F: Atlas suggests tasks that wait for review", async ({
   await expect(
     page.getByText("Suggested task: Atlas pick: Compare airport transfers"),
   ).toBeVisible();
+  await page.keyboard.press("Escape");
   await page.getByRole("link", { name: "Tasks & decisions" }).click();
   const suggested = page.getByTestId("suggested-tasks");
   await expect(suggested).toContainText("Compare airport transfers");

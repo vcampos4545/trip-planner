@@ -153,6 +153,18 @@ enum ArrangementStatus {
   BOOKED
 }
 
+/// What kind of trip this is, when the group has said so. NONE means they said it has no
+/// particular theme, so Atlas stops asking.
+enum TripTheme {
+  SKI
+  BEACH
+  OUTDOORS
+  CITY
+  FOOD
+  EVENT
+  NONE
+}
+
 model Trip {
   id                   String            @id @default(cuid())
   title                String
@@ -162,7 +174,11 @@ model Trip {
   destination          String?
   destinationConfirmed Boolean           @default(false)
   departureLocation    String?
+  // Airports people fly into and home from, kept apart from the stops they visit.
+  flyIntoAirport       String?
+  flyOutOfAirport      String?
   tripStyle            String?
+  theme                TripTheme?
   startDate            DateTime?         @db.Date
   endDate              DateTime?         @db.Date
   dateFlexibility      DateFlexibility   @default(UNKNOWN)
@@ -190,6 +206,7 @@ model Trip {
   createdBy     User                 @relation("TripCreatedBy", fields: [createdById], references: [id])
   updatedBy     User?                @relation("TripUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   members       TripMember[]
+  stops         TripStop[]
   invitations   TripInvitation[]
   preferences   TripPreference[]
   conversations Conversation[]
@@ -221,6 +238,22 @@ model TripMember {
 
   @@unique([tripId, userId])
   @@index([userId])
+}
+
+/// A place the trip visits, in order. A one-place trip has one stop, which mirrors the destination.
+model TripStop {
+  id        String    @id @default(cuid())
+  tripId    String
+  position  Int
+  name      String
+  startDate DateTime? @db.Date
+  endDate   DateTime? @db.Date
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId, position])
 }
 
 model TripInvitation {
