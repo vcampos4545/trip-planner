@@ -1065,17 +1065,17 @@ function flightToolOutput(context: TripContext, result: FlightSearchResult) {
 const searchFlightsTool = defineTool({
   name: "search_flights",
   description:
-    "Search flights with the configured flight provider. Call it only when the user wants flights or flight prices. Returns priced offers with airline, local times, stops, duration, total price and currency, source, retrieval time, and any price insights, or says flight search is unavailable. Only state flight details that this tool returned.",
+    "Search flights with the configured flight provider. Call it only when the user wants flights or flight prices. Returns priced offers with airline, local times, stops, duration, total price and currency, source, retrieval time, and any price insights, or says flight search is unavailable. If a place name fits more than one city, no search is run and the error lists the choices: ask the user which one they mean, then search again with that choice. Only state flight details that this tool returned.",
   args: z.object({
     origin: z
       .string()
       .describe(
-        "Departure airport or city: an IATA code like JFK (preferred, it saves a lookup), or a city name.",
+        "Departure airport or city: an IATA airport or city code like JFK or NYC (preferred, it saves a lookup), or a city name like New York.",
       ),
     destination: z
       .string()
       .describe(
-        "Arrival airport or city: an IATA code like LIS (preferred, it saves a lookup), or a city name.",
+        "Arrival airport or city: an IATA airport or city code like LIS (preferred, it saves a lookup), or a city name like Lisbon.",
       ),
     departureDate: z.string().regex(DATE_PATTERN).describe("YYYY-MM-DD."),
     returnDate: z

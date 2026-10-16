@@ -4,6 +4,12 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import {
+  airportsForCode,
+  parsePlaceInput,
+  pickPlace,
+  type PlaceSuggestion,
+} from "@/lib/domain/flight-places";
 import type {
   CabinClass,
   FlightAirport,
@@ -17,6 +23,7 @@ import type {
 import { centsToDecimal } from "@/lib/money";
 
 import type { FlightCacheStore } from "./cache";
+import { fromPick, resolveRoute, unknownPlace } from "./places";
 import {
   FlightProviderError,
   type FlightSearchProvider,
@@ -119,9 +126,16 @@ const autocompleteSchema = z.object({
       z.object({
         name: z.string(),
         type: z.string().nullish(),
+        description: z.string().nullish(),
         id: z.string().nullish(),
         airports: z
-          .array(z.object({ id: z.string(), name: z.string().nullish() }))
+          .array(
+            z.object({
+              id: z.string(),
+              name: z.string().nullish(),
+              city: z.string().nullish(),
+            }),
+          )
           .nullish(),
       }),
     )
@@ -165,10 +179,9 @@ export class SerpApiFlightProvider implements FlightSearchProvider {
     query: FlightSearchQuery,
     signal?: AbortSignal,
   ): Promise<FlightSearchResult> {
-    const [origin, destination] = await Promise.all([
-      this.resolvePlace(query.origin, signal),
-      this.resolvePlace(query.destination, signal),
-    ]);
+    const [origin, destination] = await resolveRoute(query, (place) =>
+      this.resolvePlace(place, signal),
+    );
     // Google Flights always searches one cabin. "Any cabin" searches economy and says so.
     const cabin: CabinClass = query.cabin ?? "economy";
     const originCodes = codesOf(origin);
@@ -270,69 +283,80 @@ export class SerpApiFlightProvider implements FlightSearchProvider {
   }
 
   /**
-   * Accepts a 3-letter code as is. Otherwise asks Google Flights autocomplete for the best match
-   * and searches all of its airports, so "New York" covers JFK, LGA, and EWR.
+   * Accepts 3-letter codes in any case, searching a metro code's airports ("NYC" is JFK, LGA, and
+   * EWR). Otherwise asks Google Flights autocomplete and searches all of the matching city's
+   * airports, so "New York" covers JFK, LGA, and EWR. A name that fits several cities with their
+   * own airports is reported with the candidates instead of guessing.
    */
   async resolvePlace(
     query: string,
     signal?: AbortSignal,
   ): Promise<ResolvedPlace> {
     const trimmed = query.trim();
-    if (/^[A-Za-z]{3}$/.test(trimmed)) {
-      const code = trimmed.toUpperCase();
-      return { query: trimmed, iataCode: code, name: code };
-    }
-    // "Lisbon, Portugal" matches better as "Lisbon".
-    const name = trimmed.split(",")[0]!.trim();
-    const cacheKey = `serpapi:place:${name.toLowerCase()}`;
-    const cached = await readCache(this.placeCache, cacheKey, this.now());
-    const resolved =
-      (cached as Omit<ResolvedPlace, "query"> | null) ??
-      (await this.lookupPlace(name, trimmed, signal));
-    if (!cached) {
-      await writeCache(
-        this.placeCache,
-        cacheKey,
-        resolved,
-        new Date(this.now().getTime() + PLACE_CACHE_MS),
+    const input = parsePlaceInput(trimmed);
+    if (!input) throw unknownPlace(trimmed);
+    if (input.kind === "codes") {
+      const airports = [...new Set(input.codes.flatMap(airportsForCode))].slice(
+        0,
+        MAX_AIRPORTS_PER_PLACE,
       );
+      const [code] = input.codes;
+      return {
+        query: trimmed,
+        iataCode: code!,
+        name: input.codes.join(", "),
+        ...(airports.length > 1 || airports[0] !== code
+          ? { airportCodes: airports }
+          : {}),
+      };
     }
-    return { ...resolved, query: trimmed };
+    const suggestions = await this.suggestions(input.name, signal);
+    return {
+      ...fromPick(trimmed, pickPlace(input, suggestions)),
+      query: trimmed,
+    };
   }
 
-  private async lookupPlace(
+  /** Google's suggestions for a name, kept for a month so a name costs a search only once. */
+  private async suggestions(
     name: string,
-    original: string,
     signal?: AbortSignal,
-  ): Promise<Omit<ResolvedPlace, "query">> {
+  ): Promise<PlaceSuggestion[]> {
+    const cacheKey = `serpapi:suggestions:${name.toLowerCase()}`;
+    const cached = await readCache(this.placeCache, cacheKey, this.now());
+    if (Array.isArray(cached)) return cached as PlaceSuggestion[];
     const json = await this.request(
       { engine: "google_flights_autocomplete", q: name, hl: "en", gl: "us" },
       signal,
     );
     const parsed = autocompleteSchema.safeParse(json);
     if (!parsed.success) throw badResponse();
-    for (const suggestion of parsed.data.suggestions ?? []) {
+    const suggestions = (parsed.data.suggestions ?? []).map((suggestion) => {
+      const airports = (suggestion.airports ?? []).filter((airport) =>
+        IATA_CODE.test(airport.id.toUpperCase()),
+      );
       const codes = [
-        ...new Set(
-          (suggestion.airports ?? [])
-            .map((airport) => airport.id.toUpperCase())
-            .filter((code) => IATA_CODE.test(code)),
-        ),
+        ...new Set(airports.map((airport) => airport.id.toUpperCase())),
       ].slice(0, MAX_AIRPORTS_PER_PLACE);
       if (codes.length === 0 && suggestion.id && IATA_CODE.test(suggestion.id))
         codes.push(suggestion.id);
-      if (codes.length > 0) {
-        return {
-          iataCode: codes[0]!,
-          name: suggestion.name,
-          airportCodes: codes,
-        };
-      }
+      return {
+        name: suggestion.name,
+        detail: suggestion.description ?? null,
+        codes,
+        airportCities: airports.map((airport) => airport.city ?? ""),
+      } satisfies PlaceSuggestion;
+    });
+    // A name with no airports is not kept, so a fix on Google's side is picked up next time.
+    if (suggestions.some((suggestion) => suggestion.codes.length > 0)) {
+      await writeCache(
+        this.placeCache,
+        cacheKey,
+        suggestions,
+        new Date(this.now().getTime() + PLACE_CACHE_MS),
+      );
     }
-    throw new FlightProviderError(
-      "unknown_place",
-      `No airport or city matches "${original.slice(0, 80)}". Try a 3-letter code such as LIS.`,
-    );
+    return suggestions;
   }
 
   private toResult(

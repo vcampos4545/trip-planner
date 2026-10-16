@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ASSISTANT_NAME } from "@/config/brand";
 import { useAction } from "@/hooks/use-action";
+import type { FieldChoice } from "@/lib/action-result";
 import { useZodForm } from "@/hooks/use-zod-form";
 import { formatDateOnly, formatTimestamp } from "@/lib/dates";
 import {
@@ -124,6 +125,9 @@ function FlightSearch({
 }) {
   const [pending, startTransition] = useTransition();
   const [response, setResponse] = useState<FlightSearchResponse | null>(null);
+  const [choices, setChoices] = useState<
+    Partial<Record<PlaceField, FieldChoice[]>>
+  >({});
   const { form, formError, applyResult } = useZodForm(
     flightSearchFormSchema,
     defaults,
@@ -139,48 +143,79 @@ function FlightSearch({
     maxStops: useFieldId("maxStops"),
   };
 
+  const search = form.handleSubmit(() =>
+    startTransition(async () => {
+      const result = await searchFlightsAction(tripId, form.getValues());
+      setChoices(result.ok ? {} : (result.fieldChoices ?? {}));
+      if (applyResult(result) && result.ok) setResponse(result.data);
+      else setResponse(null);
+    }),
+  );
+  const clearChoices = (field: PlaceField) =>
+    setChoices((current) => ({ ...current, [field]: undefined }));
+  // Picking one of several places with the same name fills it in and searches again.
+  const pick = (field: PlaceField, value: string) => {
+    form.setValue(field, value, { shouldValidate: true });
+    clearChoices(field);
+    void search();
+  };
+
   return (
     <div className="mt-4 space-y-4">
       <form
         noValidate
         className="grid gap-3"
         aria-label="Flight search"
-        onSubmit={form.handleSubmit(() =>
-          startTransition(async () => {
-            const result = await searchFlightsAction(tripId, form.getValues());
-            if (applyResult(result) && result.ok) setResponse(result.data);
-            else setResponse(null);
-          }),
-        )}
+        onSubmit={search}
       >
         <FormError message={formError} />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <FieldShell
-            label="From"
-            htmlFor={id.origin}
-            error={errors.origin?.message}
-            hint="City or airport code"
-          >
-            <Input
-              id={id.origin}
-              placeholder="New York or JFK"
-              aria-invalid={Boolean(errors.origin)}
-              {...form.register("origin")}
+          <div className="grid content-start gap-1.5">
+            <FieldShell
+              label="From"
+              htmlFor={id.origin}
+              error={errors.origin?.message}
+              hint="City or airport code"
+            >
+              <Input
+                id={id.origin}
+                placeholder="New York or JFK"
+                aria-invalid={Boolean(errors.origin)}
+                {...form.register("origin", {
+                  onChange: () => clearChoices("origin"),
+                })}
+              />
+            </FieldShell>
+            <PlaceChoices
+              label="From"
+              choices={choices.origin}
+              disabled={pending}
+              onPick={(value) => pick("origin", value)}
             />
-          </FieldShell>
-          <FieldShell
-            label="To"
-            htmlFor={id.destination}
-            error={errors.destination?.message}
-            hint="City or airport code"
-          >
-            <Input
-              id={id.destination}
-              placeholder="Lisbon or LIS"
-              aria-invalid={Boolean(errors.destination)}
-              {...form.register("destination")}
+          </div>
+          <div className="grid content-start gap-1.5">
+            <FieldShell
+              label="To"
+              htmlFor={id.destination}
+              error={errors.destination?.message}
+              hint="City or airport code"
+            >
+              <Input
+                id={id.destination}
+                placeholder="Lisbon or LIS"
+                aria-invalid={Boolean(errors.destination)}
+                {...form.register("destination", {
+                  onChange: () => clearChoices("destination"),
+                })}
+              />
+            </FieldShell>
+            <PlaceChoices
+              label="To"
+              choices={choices.destination}
+              disabled={pending}
+              onPick={(value) => pick("destination", value)}
             />
-          </FieldShell>
+          </div>
           <FieldShell
             label="Depart"
             htmlFor={id.departureDate}
@@ -247,6 +282,44 @@ function FlightSearch({
       </form>
 
       {response ? <FlightResults tripId={tripId} response={response} /> : null}
+    </div>
+  );
+}
+
+type PlaceField = "origin" | "destination";
+
+/** The places a name could mean, to pick from instead of guessing. */
+function PlaceChoices({
+  label,
+  choices,
+  disabled,
+  onPick,
+}: {
+  label: string;
+  choices: FieldChoice[] | undefined;
+  disabled: boolean;
+  onPick: (value: string) => void;
+}) {
+  if (!choices?.length) return null;
+  return (
+    <div
+      role="group"
+      aria-label={`Places that match ${label}`}
+      className="flex flex-wrap gap-1.5"
+      data-testid="place-choices"
+    >
+      {choices.map((choice) => (
+        <Button
+          key={choice.value}
+          type="button"
+          size="xs"
+          variant="outline"
+          disabled={disabled}
+          onClick={() => onPick(choice.value)}
+        >
+          {choice.label}
+        </Button>
+      ))}
     </div>
   );
 }

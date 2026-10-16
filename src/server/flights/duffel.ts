@@ -3,6 +3,11 @@ import "server-only";
 import { z } from "zod";
 
 import {
+  parsePlaceInput,
+  pickPlace,
+  type PlaceSuggestion,
+} from "@/lib/domain/flight-places";
+import {
   type FlightAirport,
   type FlightOffer,
   type FlightSlice,
@@ -11,6 +16,7 @@ import {
 } from "@/lib/flights";
 import { centsToDecimal, toCents } from "@/lib/money";
 
+import { fromPick, resolveRoute, unknownPlace } from "./places";
 import {
   FlightProviderError,
   type FlightSearchProvider,
@@ -86,6 +92,16 @@ const placesSchema = z.object({
       type: z.string().nullish(),
       iata_code: z.string().nullish(),
       name: z.string(),
+      city_name: z.string().nullish(),
+      iata_country_code: z.string().nullish(),
+      airports: z
+        .array(
+          z.object({
+            iata_code: z.string().nullish(),
+            city_name: z.string().nullish(),
+          }),
+        )
+        .nullish(),
     }),
   ),
 });
@@ -134,10 +150,9 @@ export class DuffelFlightProvider implements FlightSearchProvider {
     query: FlightSearchQuery,
     signal?: AbortSignal,
   ): Promise<FlightSearchResult> {
-    const [origin, destination] = await Promise.all([
-      this.resolvePlace(query.origin, signal),
-      this.resolvePlace(query.destination, signal),
-    ]);
+    const [origin, destination] = await resolveRoute(query, (place) =>
+      this.resolvePlace(place, signal),
+    );
     const slices = [
       {
         origin: origin.iataCode,
@@ -211,21 +226,26 @@ export class DuffelFlightProvider implements FlightSearchProvider {
     };
   }
 
-  /** Accepts a 3-letter code as is; otherwise asks Duffel for the best matching city or airport. */
+  /**
+   * Accepts a 3-letter airport or city code in any case; Duffel searches a city code's airports
+   * itself. Otherwise asks Duffel for matching cities and airports. A name that fits several
+   * cities is reported with the candidates instead of guessing.
+   */
   async resolvePlace(
     query: string,
     signal?: AbortSignal,
   ): Promise<ResolvedPlace> {
     const trimmed = query.trim();
-    if (/^[A-Za-z]{3}$/.test(trimmed)) {
-      const code = trimmed.toUpperCase();
+    const input = parsePlaceInput(trimmed);
+    if (!input) throw unknownPlace(trimmed);
+    if (input.kind === "codes") {
+      // A slice has one origin and one destination, so a list searches its first code.
+      const code = input.codes[0]!;
       return { query: trimmed, iataCode: code, name: code };
     }
-    // "Lisbon, Portugal" matches better as "Lisbon".
-    const name = trimmed.split(",")[0]!.trim();
     const json = await this.request(
       "GET",
-      `/places/suggestions?query=${encodeURIComponent(name)}`,
+      `/places/suggestions?query=${encodeURIComponent(input.name)}`,
       undefined,
       signal,
     );
@@ -236,16 +256,30 @@ export class DuffelFlightProvider implements FlightSearchProvider {
         "Duffel sent a response the app couldn't read. Try again in a moment.",
       );
     }
-    const match = parsed.data.data.find(
-      (place) => place.iata_code && IATA_CODE.test(place.iata_code),
-    );
-    if (!match?.iata_code) {
-      throw new FlightProviderError(
-        "unknown_place",
-        `No airport or city matches "${trimmed.slice(0, 80)}". Try a 3-letter code such as LIS.`,
-      );
-    }
-    return { query: trimmed, iataCode: match.iata_code, name: match.name };
+    const suggestions = parsed.data.data.flatMap((place): PlaceSuggestion[] => {
+      const code = place.iata_code?.toUpperCase();
+      if (!code || !IATA_CODE.test(code)) return [];
+      const city = place.type === "city";
+      return [
+        {
+          name: place.name,
+          detail: [place.city_name, place.iata_country_code]
+            .filter(Boolean)
+            .join(" "),
+          codes: [code],
+          // A city code is the city's own; its airports are listed when Duffel sends them.
+          airportCities: city
+            ? place.airports?.length
+              ? place.airports.map((airport) => airport.city_name ?? place.name)
+              : [place.name]
+            : [place.city_name ?? ""],
+        },
+      ];
+    });
+    return {
+      ...fromPick(trimmed, pickPlace(input, suggestions)),
+      query: trimmed,
+    };
   }
 
   private toOffer(

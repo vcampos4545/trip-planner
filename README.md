@@ -298,7 +298,9 @@ data. If Atlas leaves that out, the app adds the notice to the reply. Live token
 ### With either provider
 
 - The search is prefilled from the trip's departure city, the airport people fly into (or the
-  destination), dates, and group size. You can type a city name or a 3-letter airport code.
+  destination), dates, and group size. You can type a city name ("New York") or a 3-letter airport
+  or city code ("JFK", "NYC") in any case. When a name fits more than one city, such as "Portland",
+  the panel lists them under the field to pick from.
 - Results show the airline, local departure and arrival times, stops, duration, total price and
   currency for all travelers, source, and retrieval time.
 - **Save as considering** adds a flight booking record that is "Not booked yet" with you marked

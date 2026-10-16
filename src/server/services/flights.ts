@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { Prisma } from "@/generated/prisma/client";
+import type { FieldChoice } from "@/lib/action-result";
 import {
   isDateOnly,
   isTimeOfDay,
@@ -26,6 +27,7 @@ import { db } from "@/server/db";
 import { DomainError, invalid } from "@/server/errors";
 import {
   FlightProviderError,
+  RouteLookupError,
   getFlightSearchStatus,
   type FlightSearchProvider,
   type FlightSearchQuery,
@@ -40,11 +42,34 @@ function notConfigured() {
   );
 }
 
+/**
+ * From or To could not be searched as typed: each message goes under its field, with the places
+ * to pick from when a name fits more than one city.
+ */
+function routeFailure(error: RouteLookupError) {
+  const fieldErrors: Record<string, string[]> = {};
+  const fieldChoices: Record<string, FieldChoice[]> = {};
+  for (const issue of error.issues) {
+    fieldErrors[issue.field] = [issue.message];
+    if (issue.candidates.length > 0)
+      fieldChoices[issue.field] = issue.candidates;
+  }
+  return new DomainError(
+    "VALIDATION",
+    `No flights were searched. ${error.message}`,
+    fieldErrors,
+    fieldChoices,
+  );
+}
+
 /** Turns a provider failure into a message that is safe to show. Nothing is ever written. */
 function providerFailure(provider: FlightSearchProvider, error: unknown) {
+  if (error instanceof RouteLookupError) return routeFailure(error);
   if (error instanceof FlightProviderError) {
     const userError =
-      error.kind === "invalid_request" || error.kind === "unknown_place";
+      error.kind === "invalid_request" ||
+      error.kind === "unknown_place" ||
+      error.kind === "ambiguous_place";
     if (!userError) {
       console.error(`[flights] ${provider.id} search failed: ${error.kind}`);
     }

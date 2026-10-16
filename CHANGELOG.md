@@ -68,6 +68,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   test mode. Atlas names the configured flight source instead of assuming Duffel.
 - Round-trip results show "round-trip total" next to the price.
 
+### Fixed
+
+- Flight search From and To take every form the placeholders advertise, with SerpApi and Duffel
+  alike and in Atlas's `search_flights`: city names ("New York", "Lisbon"), airport codes in any
+  case ("JFK", "lis"), metro codes ("NYC" searches JFK, LGA, and EWR on Google Flights), a trip's
+  own wording with a note in brackets ("New York City (Vaughn)", "Boston (BOS)"), and the
+  placeholder text itself ("New York or JFK"). Before, a prefilled place such as "New York City
+  (Vaughn)" failed with "No airport or city matches".
+- A name that fits more than one city with its own airport, such as "Portland", no longer
+  searches the first match. The form lists the candidates under the field and searches the one
+  you pick, and Atlas asks which one you mean. A place that matches nothing is named under its
+  field instead of at the top of the form. City lookups are now cached as Google's suggestions,
+  so earlier cached lookups are looked up again once.
+
 ### Upgrade notes
 
 - Run `pnpm db:deploy`. The migration adds stops, airports, and themes, and turns each trip's

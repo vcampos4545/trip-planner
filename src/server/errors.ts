@@ -1,3 +1,5 @@
+import type { FieldChoice } from "@/lib/action-result";
+
 /**
  * Domain errors thrown by services. Server actions turn them into user-facing results.
  * Messages are safe to show to the user.
@@ -17,6 +19,7 @@ export class DomainError extends Error {
     readonly code: ErrorCode,
     message: string,
     readonly fieldErrors?: Record<string, string[]>,
+    readonly fieldChoices?: Record<string, FieldChoice[]>,
   ) {
     super(message);
     this.name = "DomainError";

@@ -10,16 +10,24 @@ import {
   type FlightSearchResult,
 } from "@/server/flights";
 import { dbFlightCache } from "@/server/flights/db-cache";
-import { SERPAPI_SOURCE_NAME } from "@/server/flights/serpapi";
+import {
+  SERPAPI_SOURCE_NAME,
+  SerpApiFlightProvider,
+} from "@/server/flights/serpapi";
 import { resetRateLimits } from "@/server/rate-limit";
 import { getOrCreateTripConversation } from "@/server/services/conversations";
 import { saveFlightOffer } from "@/server/services/flights";
 import { createManualTrip } from "@/server/services/trips";
 
 import { createUser, db, resetDatabase } from "../support/db";
-import { sampleOffer } from "../support/duffel";
+import { jsonResponse, sampleOffer } from "../support/duffel";
 import { ScriptedProvider } from "../support/mock-provider";
-import { GOOGLE_FLIGHTS_URL } from "../support/serpapi";
+import {
+  GOOGLE_FLIGHTS_URL,
+  SUGGESTIONS_BY_QUERY,
+  serpItem,
+  serpSearch,
+} from "../support/serpapi";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -339,5 +347,96 @@ describe("Postgres flight cache", () => {
       offers: [2],
     });
     expect(await db.flightSearchCache.count()).toBe(1);
+  });
+});
+
+describe("Atlas searches places the way the form does", () => {
+  function serpApi() {
+    const calls: URL[] = [];
+    const fetchImpl = async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      calls.push(url);
+      if (url.searchParams.get("engine") === "google_flights_autocomplete") {
+        const q = (url.searchParams.get("q") ?? "").toLowerCase();
+        return jsonResponse(
+          200,
+          SUGGESTIONS_BY_QUERY[q] ?? { suggestions: [] },
+        );
+      }
+      return jsonResponse(
+        200,
+        serpSearch({
+          best: [
+            serpItem({
+              price: 520,
+              legs: [
+                {
+                  from: "JFK",
+                  to: "LIS",
+                  depart: "2027-05-20 8:05",
+                  arrive: "2027-05-20 20:15",
+                },
+              ],
+              bookingToken: "book_1",
+            }),
+          ],
+        }),
+      );
+    };
+    const flights = new SerpApiFlightProvider({
+      apiKey: "serp_integration_key",
+      baseUrl: "https://serpapi.example",
+      fetch: fetchImpl as typeof fetch,
+    });
+    return { flights, calls };
+  }
+
+  const placeSearch = (origin: string, destination: string) => ({
+    name: "search_flights",
+    args: { ...searchCall.args, origin, destination, returnDate: null },
+  });
+
+  it.each([
+    ["New York", "Lisbon", "JFK, LGA, EWR to LIS"],
+    ["JFK", "LIS", "JFK to LIS"],
+    ["new york", "lis", "JFK, LGA, EWR to LIS"],
+  ])("searches %j to %j", async (origin, destination, route) => {
+    const { organizer, conversation } = await setup();
+    const { flights } = serpApi();
+    const provider = new ScriptedProvider([
+      { calls: [placeSearch(origin, destination)], reply: "Here you go." },
+    ]);
+    const result = await sendAtlasMessage(
+      organizer,
+      conversation.id,
+      `Flights from ${origin} to ${destination}`,
+      { provider, flights },
+    );
+    expect(result.effects[0]!.summary).toBe(
+      `Searched Google Flights via SerpApi for flights ${route} (1 results)`,
+    );
+  });
+
+  it("hands back the choices for an ambiguous city without searching", async () => {
+    const { organizer, conversation } = await setup();
+    const { flights, calls } = serpApi();
+    const provider = new ScriptedProvider([
+      {
+        calls: [placeSearch("JFK", "Portland")],
+        reply: "Did you mean Portland, Oregon or Portland, Maine?",
+      },
+    ]);
+    await sendAtlasMessage(organizer, conversation.id, "Flights to Portland", {
+      provider,
+      flights,
+    });
+    expect(provider.toolOutputs[0]!.output).toEqual({
+      ok: false,
+      error:
+        'No flights were searched. To: "Portland" could be Portland, Oregon (PDX) or Portland, Maine (PWM). Pick one.',
+    });
+    expect(
+      calls.some((url) => url.searchParams.get("engine") === "google_flights"),
+    ).toBe(false);
   });
 });
