@@ -33,6 +33,15 @@ import {
   type TripDetailsPatch,
   type TripDraft,
 } from "@/lib/domain/trip-details";
+import {
+  CABIN_CLASSES,
+  MAX_FLIGHT_PASSENGERS,
+  TEST_DATA_NOTICE,
+  bookElsewhereUrl,
+  describeSlice,
+  type FlightOffer,
+} from "@/lib/flights";
+import { flightSearchFormSchema } from "@/lib/validation/flights";
 import type { TripAccess } from "@/server/access";
 import type { CurrentUser } from "@/server/auth/session";
 import { db } from "@/server/db";
@@ -43,6 +52,8 @@ import {
   type ResearchProvider,
   type ResearchResult,
 } from "@/server/research";
+import type { FlightSearchProvider } from "@/server/flights";
+import { saveFlightOffer, searchFlights } from "@/server/services/flights";
 import { describeFields, tripToDetails } from "@/server/services/trip-mapping";
 import { applyAtlasPatch, describeChange } from "@/server/services/trips";
 import { createOption, listOptions } from "@/server/services/research";
@@ -69,6 +80,8 @@ export type ToolEffect = {
     | "error";
   summary: string;
   entityId?: string;
+  /** Set when the tool returned provider test data, so the reply is labelled as such. */
+  testData?: boolean;
 };
 
 type BaseContext = {
@@ -89,6 +102,8 @@ export type TripContext = BaseContext & {
   access: TripAccess;
   research: ResearchProvider;
   searchResults: Map<string, ResearchResult>;
+  flights: FlightSearchProvider | null;
+  flightResults: Map<string, FlightOffer>;
 };
 
 export type AtlasContext = DraftContext | TripContext;
@@ -868,6 +883,165 @@ const listSavedOptions = defineTool({
 });
 
 // ---------------------------------------------------------------------------
+// Flights
+// ---------------------------------------------------------------------------
+
+const searchFlightsTool = defineTool({
+  name: "search_flights",
+  description:
+    "Search flights with the configured flight provider. Returns priced offers with airline, local times, stops, duration, total price and currency, source, and retrieval time, or says flight search is unavailable. Only state flight details that this tool returned.",
+  args: z.object({
+    origin: z
+      .string()
+      .describe(
+        "Departure airport or city: an IATA code like JFK, or a city name.",
+      ),
+    destination: z
+      .string()
+      .describe(
+        "Arrival airport or city: an IATA code like LIS, or a city name.",
+      ),
+    departureDate: z.string().regex(DATE_PATTERN).describe("YYYY-MM-DD."),
+    returnDate: z
+      .string()
+      .regex(DATE_PATTERN)
+      .nullable()
+      .describe("YYYY-MM-DD for a round trip, or null for one way."),
+    passengers: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        `Adult travelers, 1 to ${MAX_FLIGHT_PASSENGERS}. null uses the trip's group size.`,
+      ),
+    cabin: z.enum(CABIN_CLASSES).nullable().describe("null means any cabin."),
+    maxStops: z
+      .number()
+      .int()
+      .nullable()
+      .describe("0 for nonstop only, up to 2. null means at most 1 stop."),
+  }),
+  phases: ["trip"],
+  async run(context, args) {
+    if (context.phase !== "trip") return {};
+    if (!context.flights) {
+      context.effects.push({
+        tool: this.name,
+        ok: false,
+        kind: "searched",
+        summary: "Flight search is not configured",
+      });
+      return {
+        available: false,
+        message:
+          "Flight search is not configured, so there are no flight results. Do not quote airlines, times, or fares.",
+      };
+    }
+    let passengers = args.passengers;
+    if (passengers === null) {
+      const trip = await db.trip.findUniqueOrThrow({
+        where: { id: context.access.tripId },
+        select: { groupSize: true },
+      });
+      passengers = trip.groupSize ?? 1;
+    }
+    const parsed = flightSearchFormSchema.safeParse({
+      origin: args.origin,
+      destination: args.destination,
+      departureDate: args.departureDate,
+      returnDate: args.returnDate ?? "",
+      passengers: String(
+        Math.min(Math.max(passengers, 1), MAX_FLIGHT_PASSENGERS),
+      ),
+      cabin: args.cabin ?? "any",
+      maxStops: String(Math.min(Math.max(args.maxStops ?? 1, 0), 2)),
+    });
+    if (!parsed.success) {
+      throw new DomainError(
+        "VALIDATION",
+        `No search was run. ${parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
+      );
+    }
+    const result = await searchFlights(context.flights, parsed.data);
+    const listed = result.offers.slice(0, 6).map((offer, index) => {
+      const id = `f${context.flightResults.size + index + 1}`;
+      context.flightResults.set(id, offer);
+      return {
+        resultId: id,
+        airline: offer.airline.name,
+        totalPrice: `${offer.totalAmount} ${offer.totalCurrency} total for ${offer.passengers}`,
+        slices: offer.slices.map(describeSlice),
+      };
+    });
+    const route = `${result.search.origin.iataCode} to ${result.search.destination.iataCode}`;
+    context.effects.push({
+      tool: this.name,
+      ok: true,
+      kind: "searched",
+      summary: `Searched ${result.sourceName} for flights ${route} (${listed.length} results)${result.testMode ? `. ${TEST_DATA_NOTICE}` : ""}`,
+      testData: result.testMode,
+    });
+    return {
+      available: true,
+      testData: result.testMode,
+      dataNotice: result.testMode
+        ? `${TEST_DATA_NOTICE}. These come from Duffel's test environment and may use real airline names, but they are samples. Tell the user plainly that they are test data and not real flights, fares, or availability.`
+        : "Fares can change before booking. This app does not book flights.",
+      source: result.sourceName,
+      retrievedAt: result.retrievedAt,
+      search: result.search,
+      bookElsewhere: bookElsewhereUrl({
+        origin: result.search.origin.iataCode,
+        destination: result.search.destination.iataCode,
+        departureDate: result.search.departureDate,
+        returnDate: result.search.returnDate,
+      }),
+      results: listed,
+    };
+  },
+});
+
+const saveFlightTool = defineTool({
+  name: "save_flight_option",
+  description:
+    "Save one flight from search_flights (same turn) to the trip's options as a suggestion, with its source, price, and retrieval time. This is not a booking and does not reserve anything.",
+  args: z.object({
+    resultId: z.string().describe("resultId from search_flights."),
+  }),
+  phases: ["trip"],
+  async run(context, args) {
+    if (context.phase !== "trip") return {};
+    const offer = context.flightResults.get(args.resultId);
+    if (!offer) {
+      throw new DomainError(
+        "VALIDATION",
+        `Unknown resultId "${args.resultId}". Search flights first.`,
+      );
+    }
+    const saved = await saveFlightOffer(context.access, offer, {
+      asBooking: false,
+    });
+    if (!saved.alreadySaved) {
+      context.effects.push({
+        tool: this.name,
+        ok: true,
+        kind: "saved",
+        summary: `Saved a ${offer.airline.name} flight to options${offer.testMode ? ` (${TEST_DATA_NOTICE})` : ""}`,
+        entityId: saved.optionId,
+        testData: offer.testMode,
+      });
+    }
+    return {
+      saved: !saved.alreadySaved,
+      alreadySaved: saved.alreadySaved,
+      optionId: saved.optionId,
+      status: "SUGGESTED",
+      testData: offer.testMode,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Suggestions
 // ---------------------------------------------------------------------------
 
@@ -977,6 +1151,8 @@ const ALL_TOOLS: AtlasTool<any>[] = [
   searchOptions,
   saveOption,
   listSavedOptions,
+  searchFlightsTool,
+  saveFlightTool,
   suggestTaskTool,
   proposeEventTool,
   summarizeOutstanding,

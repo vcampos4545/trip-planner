@@ -11,6 +11,7 @@ import { requireTripAccess } from "@/server/access";
 import { requireUser } from "@/server/auth/session";
 import { getAiStatus } from "@/server/ai/config";
 import { db } from "@/server/db";
+import { getFlightSearchStatus } from "@/server/flights";
 import { orNotFound } from "@/server/not-found";
 import { getResearchProvider } from "@/server/research";
 import {
@@ -63,6 +64,7 @@ export default async function PlanPage({
   ]);
   const ai = getAiStatus();
   const research = getResearchProvider();
+  const flights = getFlightSearchStatus();
   const prompt =
     typeof query.prompt === "string" ? query.prompt.slice(0, 500) : undefined;
   const [optionCount, taskCount, eventCount, bookingCount] = counts;
@@ -147,6 +149,25 @@ export default async function PlanPage({
                 </span>
               </p>
             )}
+            <div className="mt-2" data-testid="flight-search-status">
+              {flights.configured ? (
+                <p className="text-xs text-muted-foreground">
+                  <Pill tone={flights.testMode ? "warning" : "confirmed"}>
+                    Flight search: {flights.label}
+                  </Pill>
+                  {flights.testMode ? (
+                    <span className="mt-1 block">
+                      Flight results are Duffel test data, not real fares or
+                      availability.
+                    </span>
+                  ) : null}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  <Pill tone="neutral">Flight search not configured</Pill>
+                </p>
+              )}
+            </div>
           </div>
         </div>
         {ai.configured ? (

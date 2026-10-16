@@ -43,6 +43,12 @@ const LIVE_SEARCH_RULES = `Live search rules:
 - Mention a price or availability only if the result includes it, and say which source stated it and that it was retrieved just now. Never estimate or invent prices or availability.
 - If search_options fails or is unavailable, say live research failed. Do not present general knowledge as live results.`;
 
+const FLIGHT_RULES = {
+  off: "Flight search is not configured. If asked about flights, say live flight search is not set up, and do not quote airlines, times, or fares.",
+  test: "For flights use search_flights. It is connected to Duffel's test environment, so every result is test data, not real flights, fares, or availability. Whenever you mention flight results, say clearly that they are Duffel test data. Answer about flights only from search_flights results in this turn, and never claim a flight is booked or reserved. Members can save a result with save_flight_option or from the Options tab.",
+  live: "For flights use search_flights. Answer about flights only from its results in this turn, mention the source and retrieval time, and say fares can change. This app does not book flights; never claim a flight is booked or reserved.",
+} as const;
+
 export function buildInstructions(params: {
   phase: "draft" | "trip";
   startMode: TripStartMode;
@@ -53,7 +59,10 @@ export function buildInstructions(params: {
   researchAvailable: boolean;
   /** Set when a live provider is selected but cannot run. */
   researchUnavailableReason?: string | null;
+  /** "test" when flight results come from a provider's test environment. */
+  flightSearch?: "off" | "test" | "live";
 }) {
+  const flightSearch = params.flightSearch ?? "off";
   const known = describeKnown(params.draft);
   const topics = nextTopics(params.draft, params.startMode, 3);
   const lines = [
@@ -71,6 +80,7 @@ export function buildInstructions(params: {
     params.phase === "trip" && params.researchAvailable
       ? LIVE_SEARCH_RULES
       : null,
+    params.phase === "trip" ? FLIGHT_RULES[flightSearch] : null,
     RULES,
     `Known so far (JSON): ${JSON.stringify(known)}`,
     topics.length > 0

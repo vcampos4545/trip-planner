@@ -7,6 +7,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Flight search on Duffel in test mode, configured with `DUFFEL_ACCESS_TOKEN` (test tokens only)
+  and `FLIGHT_PROVIDER`. A search panel on the Options tab is prefilled from the trip and shows
+  airline, local times, stops, duration, total price and currency, source, and retrieval time,
+  with a link to compare and book elsewhere.
+- Every flight result, saved option, booking note, and Atlas reply that uses flight results is
+  labelled as Duffel test data, not real fares or availability.
+- Save a flight as a suggested option with its provenance, or also track it as a "Not booked yet"
+  flight booking with yourself marked as considering. Nothing is booked through the app.
+- Atlas `search_flights` and `save_flight_option` tools that use the same service and answer
+  only from returned results. Without a token, the panel and Atlas say flight search is not
+  configured.
+
 ## [0.2.0] - 2026-10-15
 
 ### Added

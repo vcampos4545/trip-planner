@@ -24,6 +24,7 @@ Architecture notes and extension points live in [docs/architecture.md](docs/arch
 - Docker, for the local PostgreSQL container
 - A Google Cloud OAuth client to sign in (instructions below)
 - Optional: an OpenAI API key to turn on Atlas
+- Optional: a Duffel test access token to turn on flight search
 
 ## Local setup
 
@@ -51,7 +52,8 @@ Run these from the repository root.
 
    Then set `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` (see [Google OAuth](#google-oauth)) and,
    if you want Atlas, `OPENAI_API_KEY` (see [OpenAI](#openai)). For live research, also set
-   `RESEARCH_PROVIDER="openai_web"` (see [Live web search](#live-web-search)). Leave
+   `RESEARCH_PROVIDER="openai_web"` (see [Live web search](#live-web-search)). For flight search,
+   set `DUFFEL_ACCESS_TOKEN` to a Duffel test token (see [Flight search](#flight-search)). Leave
    `DATABASE_URL` as it is to use the Docker database.
 
 4. Start PostgreSQL. It listens on port 5433 and creates two databases: `trip_planner` for
@@ -182,6 +184,47 @@ Cost: OpenAI bills each web search tool call (about $10 per 1,000 calls at the t
 plus the search content tokens at the model's token rates. Check
 https://developers.openai.com/api/docs/pricing for current prices.
 
+## Flight search
+
+The Options tab has a flight search panel, and Atlas has a `search_flights` tool that uses the same
+service. Both run on [Duffel](https://duffel.com) in test mode.
+
+1. Create a free account at https://app.duffel.com/join.
+2. In the dashboard, make sure the test mode toggle is on, then open **Developers > Access
+   tokens** and create a token. Test tokens start with `duffel_test_`.
+3. Set it in `.env` and restart the app:
+
+   ```bash
+   FLIGHT_PROVIDER="duffel"
+   DUFFEL_ACCESS_TOKEN="duffel_test_..."
+   ```
+
+The Plan with AI tab then shows "Flight search: Duffel (test data)".
+
+How it behaves:
+
+- Test mode returns sample data from Duffel's test environment, never real flights, fares, or
+  availability. Results can carry real airline names as well as the fictional "Duffel Airways",
+  so the labels matter. Every result in the panel, every saved
+  option and booking note, and every Atlas reply that uses flight results says it is Duffel test
+  data. If Atlas leaves that out, the app adds the notice to the reply.
+- The search is prefilled from the trip's departure city, destination, dates, and group size.
+  City names are resolved to airport or city codes through Duffel's place suggestions; you can
+  also type a 3-letter code.
+- Results show the airline, local departure and arrival times, stops, duration, total price and
+  currency for all travelers, source, and retrieval time, plus a link to compare the route on
+  Google Flights and book elsewhere.
+- **Save to options** adds the flight as a suggestion with its source, price, and retrieval time.
+  **Save and track as considering** also adds a flight booking record that is "Not booked yet"
+  with you marked as considering. Nothing is ever marked booked, and the app never orders or pays
+  through Duffel.
+- Without a token, the panel and Atlas say flight search is not configured. A Duffel error shows
+  a message and changes no trip data.
+- Live tokens (`duffel_live_...`) are not accepted yet; the app treats flight search as not
+  configured until live fares are supported.
+
+Duffel does not charge for searches in test mode.
+
 ## Environment variables
 
 | Variable                         | Required    | Purpose                                                         |
@@ -200,6 +243,9 @@ https://developers.openai.com/api/docs/pricing for current prices.
 | `RESEARCH_PROVIDER`              | No          | `none` (default) or `openai_web` for OpenAI web search          |
 | `OPENAI_WEB_SEARCH_MODEL`        | No          | Model for web searches. Defaults to `OPENAI_MODEL`              |
 | `OPENAI_WEB_SEARCH_CONTEXT_SIZE` | No          | `low` (default), `medium`, or `high` search context             |
+| `FLIGHT_PROVIDER`                | No          | `duffel` (default) or `none` to turn flight search off          |
+| `DUFFEL_ACCESS_TOKEN`            | For flights | Duffel test token (`duffel_test_...`). Empty turns flights off  |
+| `DUFFEL_API_URL`                 | No          | Duffel API base URL. The end-to-end tests point it at a stub    |
 | `INVITE_TTL_DAYS`                | No          | Default invite link lifetime in days (1 to 30). Defaults to 7   |
 | `TEST_DATABASE_URL`              | No          | Overrides the test database URL. Its name must end with `_test` |
 | `POSTGRES_PORT`                  | No          | Host port for the Docker database. Defaults to 5433             |
@@ -230,13 +276,16 @@ Only `NEXT_PUBLIC_APP_NAME` reaches the browser. Everything else stays on the se
 
 - `pnpm test` runs two Vitest projects. `unit` covers pure logic (budget math, trip-detail
   patching, follow-up priorities, lifecycle rules, schemas, the OpenAI request mapping and the
-  OpenAI web search provider against a mocked client). `integration` runs against `trip_planner_test` and covers authorization,
-  invitations, concurrency, and the Atlas orchestrator with a scripted provider.
+  OpenAI web search provider and the Duffel flight provider against mocked clients).
+  `integration` runs against `trip_planner_test` and covers authorization, invitations,
+  concurrency, saving flights, and the Atlas orchestrator with a scripted provider.
 - `pnpm test:e2e` runs Playwright against a production build and the test database. Install the
-  browser once with `pnpm exec playwright install chromium`. It starts five local processes on
-  ports 3310 to 3313 and 3319: the app with Atlas pointed at a local OpenAI stub (3310), the app
-  with no AI key (3311), the app with OpenAI web search served by the stub (3312), the app with web
-  search selected but no key (3313), and the stub itself. No test calls the real OpenAI API. Test users get sessions inserted directly into the test database; the
+  browser once with `pnpm exec playwright install chromium`. It starts six local processes on
+  ports 3310 to 3313, 3318, and 3319: the app with Atlas pointed at a local OpenAI stub and flight
+  search pointed at a local Duffel stub (3310), the app with no AI key and no Duffel token (3311),
+  the app with OpenAI web search served by the stub (3312), the app with web search selected but no
+  key (3313), the Duffel stub (3318), and the OpenAI stub (3319). No test calls the real OpenAI or
+  Duffel API. Test users get sessions inserted directly into the test database; the
   app has no test-only sign-in route.
 
 Both suites refuse to run against a database whose name does not end in `_test`.
@@ -260,9 +309,10 @@ src/server/          server-only code
   actions/           server actions used by the UI
   ai/                Atlas orchestrator, tools, prompts, provider interface, OpenAI provider
   research/          research provider interface, OpenAI web search, and "not configured"
+  flights/           flight search provider interface and the Duffel implementation
   financial/         documented extension point for future card and rewards data
 tests/               Vitest unit and integration tests
-e2e/                 Playwright tests and the local OpenAI stub
+e2e/                 Playwright tests and the local OpenAI and Duffel stubs
 ```
 
 ## Current limitations
@@ -271,6 +321,8 @@ e2e/                 Playwright tests and the local OpenAI stub
   structured flight or hotel inventory, so prices can be out of date by the time someone books.
   With `RESEARCH_PROVIDER="none"`, options are added by hand and Atlas suggests unverified ideas
   without prices.
+- Flight search runs on Duffel test mode only, so its results are sample data. There is no price
+  tracking and no booking through Duffel.
 - Atlas replies arrive in one piece (no streaming).
 - Rate limiting is in memory, which fits a single server process. Use a shared store if you run
   several instances.

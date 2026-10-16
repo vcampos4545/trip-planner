@@ -255,6 +255,19 @@ function plan(text, instructions) {
       }),
     ];
   }
+  if (lower.includes("flights")) {
+    return [
+      functionCall("search_flights", {
+        origin: "JFK",
+        destination: "LIS",
+        departureDate: known.startDate,
+        returnDate: null,
+        passengers: null,
+        cabin: null,
+        maxStops: null,
+      }),
+    ];
+  }
   if (lower.includes("suggest tasks")) {
     return [
       functionCall("suggest_task", {
@@ -316,6 +329,15 @@ function reply(text, outputs) {
   }
   if (lower.includes("activity")) {
     return "I added two ideas for your second day as suggestions. Accept the ones you like on the Itinerary tab.";
+  }
+  if (lower.includes("flights")) {
+    // Answers only from the tool result and leaves the test-data label to the app.
+    const found = outputs.find((output) => output.ok && output.result?.results);
+    if (!found) return "I couldn't search flights right now.";
+    const [cheapest] = found.result.results;
+    return cheapest
+      ? `The cheapest flight I found is ${cheapest.airline} at ${cheapest.totalPrice}.`
+      : "No flights matched.";
   }
   if (lower.includes("suggest tasks")) {
     return "I suggested a task for comparing airport transfers. It waits for your review.";

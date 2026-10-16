@@ -18,6 +18,7 @@ import {
   type ResearchProvider,
   type ResearchResult,
 } from "@/server/research";
+import { getFlightProvider, type FlightSearchProvider } from "@/server/flights";
 import { getOwnConversation } from "@/server/services/conversations";
 import { tripToDetails } from "@/server/services/trip-mapping";
 import { createTripFromDraft } from "@/server/services/trips";
@@ -67,6 +68,7 @@ export type AtlasTurnResult = {
 type Dependencies = {
   provider?: LlmProvider | null;
   research?: ResearchProvider;
+  flights?: FlightSearchProvider | null;
   now?: Date;
 };
 
@@ -128,6 +130,8 @@ export async function sendAtlasMessage(
   const history = await loadHistory(conversation.id);
   const effects: ToolEffect[] = [];
   const research = deps.research ?? getResearchProvider();
+  const flights =
+    deps.flights === undefined ? getFlightProvider() : deps.flights;
 
   let context: AtlasContext;
   let draftForPrompt: TripDraft;
@@ -146,6 +150,8 @@ export async function sendAtlasMessage(
       access,
       research,
       searchResults: new Map(),
+      flights,
+      flightResults: new Map(),
     };
   } else {
     draftForPrompt = parseDraft(conversation.draft);
@@ -181,6 +187,7 @@ export async function sendAtlasMessage(
     userName: user.name,
     researchAvailable: research.isConfigured,
     researchUnavailableReason: research.unavailableReason ?? null,
+    flightSearch: !flights ? "off" : flights.testMode ? "test" : "live",
   });
 
   let replied = false;
@@ -201,7 +208,7 @@ export async function sendAtlasMessage(
       data: {
         conversationId: conversation.id,
         role: "ASSISTANT",
-        content: result.text,
+        content: labelTestData(result.text, effects),
         model: `${provider.id}:${result.model}`,
         metadata: {
           effects,
@@ -266,6 +273,19 @@ function sourcesFrom(results: Iterable<ResearchResult>): MessageSource[] {
     });
   }
   return [...sources.values()];
+}
+
+export const TEST_DATA_REPLY_NOTICE =
+  "Note: these flight results are Duffel test data, not real flights, fares, or availability.";
+
+/**
+ * Test flight data must never read as real. If a tool returned test data and the reply does not
+ * already say so, a plain notice is added to the reply.
+ */
+export function labelTestData(text: string, effects: ToolEffect[]) {
+  if (!effects.some((effect) => effect.testData)) return text;
+  if (/test data/i.test(text)) return text;
+  return `${text.trimEnd()}\n\n${TEST_DATA_REPLY_NOTICE}`;
 }
 
 async function loadHistory(conversationId: string): Promise<ChatTurn[]> {

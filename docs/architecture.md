@@ -108,6 +108,8 @@ Defined in `src/server/ai/tools.ts`, each with a Zod schema that doubles as a st
 | `search_options`                  | Query the research provider (only when current info is needed) |
 | `save_research_option`            | Save a suggestion, with provenance if it came from a search    |
 | `list_saved_research`             | Reuse what the group already saved                             |
+| `search_flights`                  | Query the flight provider (Duffel test mode today)             |
+| `save_flight_option`              | Save a flight result from this turn as a suggested option      |
 | `suggest_task`                    | Create a task in "suggested" state                             |
 | `propose_itinerary_event`         | Create an itinerary item in "suggested" state                  |
 | `summarize_outstanding_decisions` | Open votes, proposals, suggestions, unassigned tasks, gaps     |
@@ -131,6 +133,9 @@ Rules enforced in code, not just in the prompt:
 - A failed search is returned to the model as `{ available: false, failed: true }` and recorded as
   a "Live research failed" effect. A provider that is selected but cannot run reports "Live
   research is unavailable". In both cases nothing is saved as a live result.
+- Flight answers come only from `search_flights` results in the same turn. When a result came from
+  a provider's test environment, the tool output and the effect say it is test data, and if the
+  reply does not say "test data" the orchestrator appends a notice (`labelTestData`).
 
 ### Adding an LLM provider
 
@@ -199,6 +204,53 @@ To add another live provider:
    key in the README.
 3. Register it in `getResearchProvider()` under a new `RESEARCH_PROVIDER` value.
 
+## Flight search
+
+Flight search is separate from research providers because it returns structured, priced
+itineraries rather than pages.
+
+```
+Options tab panel ──► src/server/actions/flights.ts ──┐
+Atlas search_flights tool ────────────────────────────┤
+                                                      ▼
+                         src/server/services/flights.ts (searchFlights, saveFlightOffer)
+                                                      │
+                                                      ▼
+                    FlightSearchProvider (src/server/flights/types.ts)
+                                                      │
+                                                      ▼
+                    DuffelFlightProvider (src/server/flights/duffel.ts)
+```
+
+- `getFlightSearchStatus()` and `getFlightProvider()` in `src/server/flights/index.ts` read
+  `FLIGHT_PROVIDER` (`duffel` by default, or `none`) and `DUFFEL_ACCESS_TOKEN`. Only tokens that
+  start with `duffel_test_` are accepted, so every result today is test data. `DUFFEL_API_URL`
+  overrides the base URL for the end-to-end stub.
+- The Duffel adapter sends `Duffel-Version: v2`. It resolves city names with
+  `GET /places/suggestions` (3-letter codes pass through) and searches with
+  `POST /air/offer_requests?return_offers=true&supplier_timeout=15000`: one slice per direction, one
+  adult passenger per traveler, `cabin_class`, and `max_connections` for the stop limit. Offers are
+  validated one by one (malformed offers are dropped), sorted by price, and capped at ten. Prices
+  are kept as the decimal strings Duffel returned, with the currency and the time of the search.
+  Segment times are local to each airport and shown as such.
+- Duffel errors map to kinds (`auth`, `rate_limit`, `invalid_request`, `unknown_place`,
+  `unavailable`, `timeout`, `bad_response`) with messages that never include the token. The service
+  turns them into `DomainError`s. A search writes nothing, so a failure changes no trip data.
+- Results are sent to the browser for display. Each one carries a token sealed with an HMAC of
+  `AUTH_SECRET`, bound to the trip and user and valid for 24 hours (`src/server/flights/seal.ts`).
+  Saving opens the token, so the stored price, source, and retrieval time are exactly what the
+  provider returned.
+- `saveFlightOffer` saves a `FLIGHT` option with origin `RESEARCH_PROVIDER`, the Duffel offer ID in
+  `providerPayload` (to avoid duplicates), and a price note that says it is test data. With
+  "track as considering" it also creates a `PLANNED` flight booking linked to the option, with the
+  caller as a `CONSIDERING` participant. A second member doing the same joins that booking as
+  considering. Nothing sets a booking or participant to booked.
+
+To add a live provider or live Duffel tokens later: implement `FlightSearchProvider`, report
+`testMode: false`, register it in `getFlightProvider()`, and review the labelling (the "live" prompt
+branch already exists). Ordering through Duffel would be a new service; search results already keep
+the offer ID and expiry.
+
 ## Financial data (future)
 
 `src/server/financial/provider.ts` documents a `FinancialDataProvider` interface for a future,
@@ -231,3 +283,6 @@ provider tokens are kept, and recommendations rely only on data the provider act
   OpenAI provider pointed at a local stub of the Responses API (`e2e/support/openai-stub.mjs`).
   The stub also answers `web_search` requests with canned sources and citations, including one
   uncited result that the app must drop, and can simulate a failed search.
+- Flight search runs through the real Duffel provider pointed at a local stub of Duffel's API
+  (`e2e/support/duffel-stub.mjs`), which checks the version header and test token, resolves place
+  names, returns test offers, and simulates an outage. No automated test calls the real Duffel API.
