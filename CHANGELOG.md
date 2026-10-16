@@ -9,6 +9,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Flight search with Google Flights results through SerpApi, selected with
+  `FLIGHT_PROVIDER="serpapi"` and `SERPAPI_API_KEY`. Results are labelled "Google Flights via
+  SerpApi" with their retrieval time, prices are shown as Google returned them, and each result
+  links to Google Flights to book. Google's price insight (price level and usual range) is shown
+  when returned and labelled as Google's.
+- Round trips are searched once; the return options for an outbound flight load only when someone
+  clicks **Show return flights** or asks Atlas, through the new `search_return_flights` tool.
+- Identical SerpApi searches within `SERPAPI_CACHE_HOURS` (default 3) reuse saved results from
+  the new `FlightSearchCache` table instead of spending the quota again, and city lookups are kept
+  for 30 days. Reused results say so and keep their original retrieval time.
+- Clear messages when the SerpApi quota or hourly limit is reached or SerpApi fails. Failed
+  searches change no trip data.
+
 - Flight search on Duffel in test mode, configured with `DUFFEL_ACCESS_TOKEN` (test tokens only)
   and `FLIGHT_PROVIDER`. A search panel on the Options tab is prefilled from the trip and shows
   airline, local times, stops, duration, total price and currency, source, and retrieval time,
@@ -20,6 +33,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Atlas `search_flights` and `save_flight_option` tools that use the same service and answer
   only from returned results. Without a token, the panel and Atlas say flight search is not
   configured.
+
+### Changed
+
+- `FLIGHT_PROVIDER` now defaults to `serpapi`. Set `FLIGHT_PROVIDER="duffel"` to keep using Duffel
+  test mode. Atlas names the configured flight source instead of assuming Duffel.
+- Round-trip results show "round-trip total" next to the price.
 
 ## [0.2.0] - 2026-10-15
 

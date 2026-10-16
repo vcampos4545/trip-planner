@@ -108,7 +108,8 @@ Defined in `src/server/ai/tools.ts`, each with a Zod schema that doubles as a st
 | `search_options`                  | Query the research provider (only when current info is needed) |
 | `save_research_option`            | Save a suggestion, with provenance if it came from a search    |
 | `list_saved_research`             | Reuse what the group already saved                             |
-| `search_flights`                  | Query the flight provider (Duffel test mode today)             |
+| `search_flights`                  | Query the flight provider (SerpApi or Duffel test mode)        |
+| `search_return_flights`           | Load return options for one round-trip result, only on request |
 | `save_flight_option`              | Save a flight result from this turn as a suggested option      |
 | `suggest_task`                    | Create a task in "suggested" state                             |
 | `propose_itinerary_event`         | Create an itinerary item in "suggested" state                  |
@@ -133,9 +134,13 @@ Rules enforced in code, not just in the prompt:
 - A failed search is returned to the model as `{ available: false, failed: true }` and recorded as
   a "Live research failed" effect. A provider that is selected but cannot run reports "Live
   research is unavailable". In both cases nothing is saved as a live result.
-- Flight answers come only from `search_flights` results in the same turn. When a result came from
-  a provider's test environment, the tool output and the effect say it is test data, and if the
-  reply does not say "test data" the orchestrator appends a notice (`labelTestData`).
+- Flight answers come only from `search_flights` results in the same turn. The prompt names the
+  configured source (`FlightSearchProvider.label`, such as "Google Flights via SerpApi"). When a
+  result came from a provider's test environment, the tool output and the effect say it is test
+  data, and if the reply does not say "test data" the orchestrator appends a notice
+  (`labelTestData`). With a live provider the prompt also tells Atlas that searches spend a
+  limited quota, to search only when the user asks for flights, and to load returns only when
+  asked.
 
 ### Adding an LLM provider
 
@@ -211,21 +216,70 @@ itineraries rather than pages.
 
 ```
 Options tab panel ──► src/server/actions/flights.ts ──┐
-Atlas search_flights tool ────────────────────────────┤
+Atlas search_flights / search_return_flights tools ───┤
                                                       ▼
-                         src/server/services/flights.ts (searchFlights, saveFlightOffer)
+     src/server/services/flights.ts (searchFlights, searchReturnFlights, saveFlightOffer)
                                                       │
                                                       ▼
                     FlightSearchProvider (src/server/flights/types.ts)
                                                       │
-                                                      ▼
-                    DuffelFlightProvider (src/server/flights/duffel.ts)
+                    ┌─────────────────────────────────┴───────────────┐
+                    ▼                                                 ▼
+  CachedFlightProvider (cache.ts, Postgres store in db-cache.ts)   DuffelFlightProvider
+                    │                                              (duffel.ts, test mode)
+                    ▼
+  SerpApiFlightProvider (serpapi.ts)
 ```
 
 - `getFlightSearchStatus()` and `getFlightProvider()` in `src/server/flights/index.ts` read
-  `FLIGHT_PROVIDER` (`duffel` by default, or `none`) and `DUFFEL_ACCESS_TOKEN`. Only tokens that
-  start with `duffel_test_` are accepted, so every result today is test data. `DUFFEL_API_URL`
-  overrides the base URL for the end-to-end stub.
+  `FLIGHT_PROVIDER` (`serpapi` by default, `duffel`, or `none`). SerpApi needs `SERPAPI_API_KEY`;
+  Duffel needs `DUFFEL_ACCESS_TOKEN`, and only tokens that start with `duffel_test_` are accepted.
+  `SERPAPI_API_URL` and `DUFFEL_API_URL` override the base URLs for the end-to-end stubs.
+- `FlightSearchProvider` has `search(query)` and an optional `searchReturns(offer)`. Duffel prices a
+  whole round trip in one request, so it has no `searchReturns`. Google Flights prices a round trip
+  from the outbound choice, so SerpApi returns outbound offers with `pendingReturn` (the return
+  date and SerpApi's `departure_token`) and loads return options only through `searchReturns`.
+- Offers carry their source name, retrieval time, provider ID, and an optional `bookingUrl`.
+  Results can carry `priceInsights` (the source's own view of the route's prices) and `cached`.
+
+### SerpApi (Google Flights)
+
+- Requests go to `GET /search.json` with `engine=google_flights`: `departure_id` and `arrival_id`
+  (comma-separated airport codes), `outbound_date`, `type` 1 with `return_date` or `type` 2 for one
+  way, `adults`, `travel_class` (1 to 4), `stops` (SerpApi's 1 nonstop, 2 up to one stop, 3 up to
+  two), `currency=USD`, `hl=en`, `gl=us`, and `api_key`. The key is only ever in that query string;
+  error messages and logs never include the URL.
+- City names are resolved with `engine=google_flights_autocomplete`; every airport of the best
+  suggestion is searched (New York becomes JFK, LGA, EWR). Lookups are cached for 30 days in the
+  same store. 3-letter codes pass through.
+- `best_flights` and `other_flights` are merged, validated item by item (items without a price or
+  readable times are dropped), sorted by price, and capped at ten. Prices are Google's totals for
+  all travelers. Segment times (`YYYY-MM-DD HH:MM`, local to each airport) become the app's local
+  timestamps. Google results have no ID, so one is derived from the flights, price, and search to
+  avoid saving duplicates. `search_metadata.google_flights_url` is passed on as the booking link
+  only if it is an `https://www.google.com/travel/flights` URL. `price_insights` becomes
+  `priceInsights`, labelled as Google Flights.
+- Return options: `searchReturns` repeats the search parameters with the offer's
+  `departure_token`. Each returned item becomes an offer with both legs and the round-trip price
+  from that response. It costs one search, so the UI and Atlas run it only on request.
+- Errors map to kinds: 401/403 `auth`, 429 `rate_limit` (with separate messages for an exhausted
+  monthly quota and the hourly limit), 400 `invalid_request`, others `unavailable`. A 200 response
+  whose `error` says Google returned no results is an empty list. `search_metadata.status` of
+  `Error` is `unavailable`.
+
+### Search cache
+
+`CachedFlightProvider` wraps the SerpApi provider. A search key is a SHA-256 of the normalized
+query (trimmed, lowercased places, dates, travelers, cabin, stops); a returns key covers the
+pending return and the outbound departure. Hits are returned with `cached: true` and their original
+`retrievedAt`, so the UI can say the results were reused and how old they are. Only successful
+results are stored, for `SERPAPI_CACHE_HOURS` (default 3, 0 turns it off). The store is the
+`FlightSearchCache` table (`key`, `payload`, `expiresAt`), shared across trips because it holds only
+public fare data; writes also delete expired rows. A failing store is logged and skipped, so it
+never blocks a search.
+
+### Duffel (test mode)
+
 - The Duffel adapter sends `Duffel-Version: v2`. It resolves city names with
   `GET /places/suggestions` (3-letter codes pass through) and searches with
   `POST /air/offer_requests?return_offers=true&supplier_timeout=15000`: one slice per direction, one
@@ -233,23 +287,27 @@ Atlas search_flights tool ──────────────────
   validated one by one (malformed offers are dropped), sorted by price, and capped at ten. Prices
   are kept as the decimal strings Duffel returned, with the currency and the time of the search.
   Segment times are local to each airport and shown as such.
-- Duffel errors map to kinds (`auth`, `rate_limit`, `invalid_request`, `unknown_place`,
-  `unavailable`, `timeout`, `bad_response`) with messages that never include the token. The service
-  turns them into `DomainError`s. A search writes nothing, so a failure changes no trip data.
+- Duffel errors map to the same kinds with messages that never include the token.
+
+### Errors, sealing, and saving
+
+- The service turns provider errors into `DomainError`s; non-input failures add "Nothing in the
+  trip was changed." A search writes nothing, so a failure changes no trip data.
 - Results are sent to the browser for display. Each one carries a token sealed with an HMAC of
   `AUTH_SECRET`, bound to the trip and user and valid for 24 hours (`src/server/flights/seal.ts`).
-  Saving opens the token, so the stored price, source, and retrieval time are exactly what the
-  provider returned.
-- `saveFlightOffer` saves a `FLIGHT` option with origin `RESEARCH_PROVIDER`, the Duffel offer ID in
-  `providerPayload` (to avoid duplicates), and a price note that says it is test data. With
-  "track as considering" it also creates a `PLANNED` flight booking linked to the option, with the
-  caller as a `CONSIDERING` participant. A second member doing the same joins that booking as
-  considering. Nothing sets a booking or participant to booked.
+  Saving and loading returns open the token, so the stored price, source, retrieval time, and
+  return token are exactly what the provider returned.
+- `saveFlightOffer` saves a `FLIGHT` option with origin `RESEARCH_PROVIDER`, the provider and offer
+  ID in `providerPayload` (to avoid duplicates), the booking link when there is one, and a price
+  note that names the source or says it is test data. A round trip saved before its return is
+  chosen says so in the description and price note. With "track as considering" it also creates a
+  `PLANNED` flight booking linked to the option, with the caller as a `CONSIDERING` participant. A
+  second member doing the same joins that booking as considering. Nothing sets a booking or
+  participant to booked.
 
-To add a live provider or live Duffel tokens later: implement `FlightSearchProvider`, report
-`testMode: false`, register it in `getFlightProvider()`, and review the labelling (the "live" prompt
-branch already exists). Ordering through Duffel would be a new service; search results already keep
-the offer ID and expiry.
+To add another provider: implement `FlightSearchProvider`, set `testMode` honestly, register it in
+`getFlightProvider()`, and wrap it in `CachedFlightProvider` if searches cost quota. Booking would
+be a new service; the app does not execute bookings.
 
 ## Financial data (future)
 
