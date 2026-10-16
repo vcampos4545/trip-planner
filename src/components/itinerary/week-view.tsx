@@ -209,14 +209,17 @@ export function WeekView({
                       )}
                     >
                       <Plane className="size-3" aria-hidden />
-                      {formatDateOnly(item.startDate, "weekday")}
-                      {item.startMinute !== null
-                        ? `, ${formatMinutes(item.startMinute)}`
-                        : ""}
-                      {item.detail ? ` · ${item.detail}` : ""}
-                      <span className="font-medium">
-                        · {status === "BOOKED" ? "Booked" : "Considering"}
-                      </span>
+                      {[
+                        `${formatDateOnly(item.startDate, "weekday")}${
+                          item.startMinute !== null
+                            ? `, ${formatMinutes(item.startMinute)}`
+                            : ""
+                        }`,
+                        item.detail,
+                        status === "BOOKED" ? "Booked" : "Considering",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </li>
                   ))}
                 </ul>
