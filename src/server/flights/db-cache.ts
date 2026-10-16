@@ -6,9 +6,9 @@ import { db } from "@/server/db";
 import type { FlightCacheStore } from "./cache";
 
 /**
- * Keeps the flight search cache in Postgres so a restart or a second app instance does not lose
- * it. Rows hold public fare data only, never trip or user data. Expired rows are cleared as new
- * ones are written.
+ * Keeps the flight and stay search cache in Postgres so a restart or a second app instance does
+ * not lose it. Rows hold public fares and hotel rates only, never trip or user data. Expired rows
+ * are cleared as new ones are written.
  */
 export const dbFlightCache: FlightCacheStore = {
   async get(key, now) {

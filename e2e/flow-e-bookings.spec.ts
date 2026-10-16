@@ -21,8 +21,11 @@ test("Flow E: flights with several travelers, multiple stays, and a budget that 
   await addMemberDirectly(tripId, friend.id);
   const page = organizer.page;
 
-  // 1. Record a flight.
+  // 1. Record a flight. This server has no SerpApi key, so stay search says it is off.
   await page.goto(`/trips/${tripId}/bookings`);
+  await expect(page.getByTestId("stays-not-configured")).toContainText(
+    "SERPAPI_API_KEY is not set on the server.",
+  );
   await page.getByRole("button", { name: "Add flights" }).click();
   let dialog = page.getByRole("dialog");
   await dialog.getByLabel("Title").fill("TP 202 Boston to Porto");

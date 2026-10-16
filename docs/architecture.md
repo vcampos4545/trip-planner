@@ -148,6 +148,8 @@ Defined in `src/server/ai/tools.ts`, each with a Zod schema that doubles as a st
 | `search_flights`                  | Query the flight provider (SerpApi or Duffel test mode)        |
 | `search_return_flights`           | Load return options for one round-trip result, only on request |
 | `save_flight_option`              | Save a flight result from this turn as a suggested option      |
+| `search_stays`                    | Query the stay provider (Google Hotels via SerpApi)            |
+| `save_stay_option`                | Save a shown stay as an option, or also as considering         |
 | `suggest_task`                    | Create a task in "suggested" state                             |
 | `propose_itinerary_event`         | Create an itinerary item in "suggested" state                  |
 | `summarize_outstanding_decisions` | Open votes, proposals, suggestions, unassigned tasks, gaps     |
@@ -178,6 +180,12 @@ Rules enforced in code, not just in the prompt:
   "the American flight that lands at 2:59pm" against them in code (`matchShownFlights` in
   `src/lib/domain/flight-match.ts`). More than one match is returned as ambiguous with the
   candidates, and nothing is recorded until the user says which.
+- Stay results work the same way, numbered `s1`, `s2`, ... and saved as `stayResults`. A stay the
+  user says they booked is matched with `fromShownStay` (result ID or name, `matchShownStays` in
+  `src/lib/domain/stay-match.ts`). The match is saved as a lodging option first, so its
+  coordinates are kept, and the booking is linked to it; a stay already saved as considering is
+  marked booked instead of added again. Stays from elsewhere are recorded from what the user says,
+  with `locationName` and `address`.
 - On a trip with one member, proposal effects read "Needs your OK" and the chat shows Accept and
   Decline under the reply; the instructions tell Atlas never to mention a group. With several
   members, a proposal waits for any member to accept it on the Overview tab.
@@ -356,7 +364,7 @@ pending return and the outbound departure. Hits are returned with `cached: true`
 `retrievedAt`, so the UI can say the results were reused and how old they are. Only successful
 results are stored, for `SERPAPI_CACHE_HOURS` (default 3, 0 turns it off). The store is the
 `FlightSearchCache` table (`key`, `payload`, `expiresAt`), shared across trips because it holds only
-public fare data; writes also delete expired rows. A failing store is logged and skipped, so it
+public fares and hotel rates; writes also delete expired rows. A failing store is logged and skipped, so it
 never blocks a search.
 
 ### Duffel (test mode)
@@ -390,6 +398,83 @@ never blocks a search.
 To add another provider: implement `FlightSearchProvider`, set `testMode` honestly, register it in
 `getFlightProvider()`, and wrap it in `CachedFlightProvider` if searches cost quota. Booking would
 be a new service; the app does not execute bookings.
+
+## Stay search
+
+Stay search mirrors flight search: a provider interface, a SerpApi implementation, the same cache,
+sealed results, and a service that both the panel and Atlas call.
+
+```
+Bookings > Accommodations panel ──► src/server/actions/stays.ts ──┐
+Atlas search_stays / save_stay_option / record_booking ───┤
+                                                          ▼
+     src/server/services/stays.ts (searchStays, saveStayOffer, addStayFromLink)
+                                                          │
+                                                          ▼
+                    StaySearchProvider (src/server/stays/types.ts)
+                                                          │
+                                                          ▼
+  CachedStayProvider (stays/cache.ts, the same FlightSearchCache store)
+                                                          │
+                                                          ▼
+  SerpApiStayProvider (stays/serpapi.ts) ──► SerpApiClient (src/server/serpapi/client.ts)
+```
+
+- `getStaySearchStatus()` and `getStayProvider()` in `src/server/stays/index.ts` read
+  `STAYS_PROVIDER` (`serpapi` by default, or `none`) and reuse `SERPAPI_API_KEY`,
+  `SERPAPI_CACHE_HOURS`, and `SERPAPI_API_URL`. Flight and stay search share one SerpApi account,
+  so `SerpApiClient` holds the request, the key handling, and the error mapping for both; each
+  passes its own wording and error class (`FLIGHT_COPY`, `STAY_COPY`).
+- `StaySearchQuery` is a place, check-in and check-out, guests, kind (`hotel` or
+  `vacation_rental`), minimum bedrooms (rentals only), a nightly price range, and a sort.
+  `StaySearchProvider.supportsVacationRentals` says whether the provider can search rentals; the
+  panel hides the option and Atlas says so when it can't. To use Booking.com or Expedia instead,
+  implement the interface, register it in `getStayProvider()`, and wrap it in `CachedStayProvider`.
+- The panel is prefilled by `staySearchPlaces` and `staySearchDefaults`
+  (`src/lib/validation/stays.ts`): each stop with its dates, the destination and trip dates when
+  there are no stops, and the group size.
+
+### SerpApi (Google Hotels)
+
+- Requests go to `GET /search.json` with `engine=google_hotels`: `q`, `check_in_date`,
+  `check_out_date`, `adults`, `currency=USD`, `hl=en`, `gl=us`, `sort_by` (3 lowest price, 8 highest
+  rating, 13 most reviewed; omitted for best match), `min_price` and `max_price`, and, for rentals,
+  `vacation_rentals=true` and `bedrooms`. Google Hotels has no room-count parameter, so prices are
+  for the number of guests and the UI and Atlas say to check rooms or beds.
+- `properties` are validated one by one and capped at ten in Google's order. Places without a
+  rate are dropped, sponsored ones are marked, and ads are ignored. `rate_per_night.extracted_lowest`
+  and `total_rate.extracted_lowest` (taxes and fees included) become `nightlyAmount` and
+  `totalAmount`; a missing total stays missing rather than being computed. `prices` become the
+  price sources, cheapest first. `type` decides hotel or vacation rental per result, since a hotel
+  search can include rentals. `gps_coordinates`, `extracted_hotel_class`, `overall_rating`,
+  `reviews`, `essential_info`, `check_in_time`, `property_token`, and the first image thumbnail
+  are kept; only `https` links and images are passed on, and Google ad redirects never are. A
+  search that names one property returns that property's details instead of a list
+  (`hotels_results_state`), which is read as a single result.
+- `search_metadata.google_hotels_url` is an internal Google endpoint, so the booking link is a
+  Google travel search for the place's name and location (`googleHotelsUrl`), plus the property's
+  own site when listed.
+- Errors map like flights: 401/403 `auth`, 429 `rate_limit` (the quota message says it is shared
+  with flight search), 400 `invalid_request`, others `unavailable`, and a "no results" error is an
+  empty list.
+
+### Saving stays and links
+
+- Results are sealed for the browser with the same HMAC as flight offers, under a different
+  purpose (`sealResult("stay-offer", ...)`), so a flight token can't be saved as a stay.
+- `saveStayOffer` saves a `LODGING` option with origin `RESEARCH_PROVIDER`, the total (or nightly
+  rate when Google gave no total) with its unit, a price note, the retrieval time, the search
+  location, and the coordinates in `latitude` and `longitude` for a future map. `providerPayload`
+  keeps the offer ID (to avoid duplicates), the property token, dates, guests, both prices, and
+  the price sources. As considering, it also creates a `PLANNED` `ACCOMMODATION` booking linked to
+  the option, with check-in and check-out dates and times and the caller `CONSIDERING`. Nothing
+  sets it booked.
+- `addStayFromLink` never fetches the link. `parseListingLink` (`src/lib/domain/listing-link.ts`)
+  names the site from the host (subdomains match, look-alike hosts don't) and reads a suggested
+  name from the path on Booking.com, Expedia, and Hotels.com. The booking and a `USER` lodging
+  option keep the link, the site as provider and source, no retrieval time, and a note that the
+  details were entered by hand. A nightly price is multiplied by the nights and kept as an
+  estimate. The travelers are `CONSIDERING`, or `BOOKED` when the user says they already booked.
 
 ## Atlas panel
 
@@ -488,3 +573,7 @@ provider tokens are kept, and recommendations rely only on data the provider act
 - The SerpApi stub (`e2e/support/serpapi-stub.mjs`) also returns named flights for LGA to SLC and
   SLC to JFK, which the Park City replay (`e2e/flow-i-serpapi-park-city.spec.ts`) uses to check
   that flights bought after a search land in Bookings and on the week view.
+- The same stub answers `engine=google_hotels` with two hotels (one sponsored, plus one without a
+  rate that the app must drop) or two rentals filtered by bedrooms, and simulates an outage and an
+  exhausted quota. `e2e/flow-k-serpapi-stays.spec.ts` uses it for the panel, the cache, saving,
+  adding from a link, and Atlas.

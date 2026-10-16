@@ -200,11 +200,14 @@ function booking(values) {
     category: "FLIGHT",
     travelers: [],
     fromShownFlight: null,
+    fromShownStay: null,
     title: null,
     provider: null,
     reference: null,
     fromLocation: null,
     toLocation: null,
+    locationName: null,
+    address: null,
     startDate: null,
     startTime: null,
     endDate: null,
@@ -387,12 +390,55 @@ function parkCityReply(lower, outputs) {
   return null;
 }
 
+/** Stay search: "find a 4-bedroom place near Park City for March 5-7", then saving one. */
+function stays(lower) {
+  const place = /find a (\d+)-bedroom place near ([a-z ]+?) for/.exec(lower);
+  if (place) {
+    return [
+      functionCall("search_stays", {
+        location: place[2].replace(/\b\w/g, (c) => c.toUpperCase()),
+        checkIn: "2027-03-05",
+        checkOut: "2027-03-07",
+        guests: null,
+        kind: "vacation_rental",
+        bedrooms: Number(place[1]),
+        minPrice: null,
+        maxPrice: null,
+        sort: null,
+      }),
+    ];
+  }
+  if (lower.includes("save the first stay")) {
+    return [
+      functionCall("save_stay_option", { resultId: "s1", asConsidering: true }),
+    ];
+  }
+  return null;
+}
+
+/** Replies for stay searches, written only from tool results. */
+function staysReply(outputs) {
+  const failed = outputs.find((output) => output.ok === false);
+  if (failed) return `I couldn't search stays: ${failed.error}`;
+  const result = outputs.find((output) => output.ok)?.result;
+  if (result?.available === false) return result.message;
+  if (Array.isArray(result?.results)) {
+    return `On ${result.source} (retrieved ${result.retrievedAt}) I found ${result.results.map((item) => `${item.name} at ${item.price}`).join(" and ")}. Prices can change before booking.`;
+  }
+  if (result?.saved) {
+    return `Saved it to Accommodations with you as considering (${result.status}). Nothing is booked.`;
+  }
+  return null;
+}
+
 /** Picks tool calls for a fresh user message. */
 function plan(text, instructions) {
   const lower = text.toLowerCase();
   const known = knownDetails(instructions);
   const trip = parkCity(lower);
   if (trip) return trip;
+  const stay = stays(lower);
+  if (stay) return stay;
   if (lower.includes("live search")) {
     return [
       functionCall("search_options", {
@@ -513,6 +559,8 @@ function reply(text, outputs) {
   const failed = outputs.filter((output) => output.ok === false);
   const trip = parkCity(lower) ? parkCityReply(lower, outputs) : null;
   if (trip) return trip;
+  const stay = stays(lower) ? staysReply(outputs) : null;
+  if (stay) return stay;
   if (lower.includes("live search")) {
     const search = outputs.find((output) => output.result?.results);
     if (!search) {

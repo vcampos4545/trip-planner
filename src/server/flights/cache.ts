@@ -11,7 +11,7 @@ import type {
 } from "./types";
 
 /**
- * Identical flight searches within a short window are answered from a cache so they do not spend
+ * Identical flight (and, through `readThroughCache`, stay) searches within a short window are answered from a cache so they do not spend
  * the provider's quota again. Cached results keep their original retrieval time, so they are never
  * shown as fresher than they are, and they are marked `cached`. Only successful searches are kept.
  */
@@ -85,38 +85,50 @@ export class CachedFlightProvider implements FlightSearchProvider {
     );
   }
 
-  private async cached(
+  private cached(
     key: string,
     load: () => Promise<FlightSearchResult>,
   ): Promise<FlightSearchResult> {
+    return readThroughCache(this.store, key, this.ttlMs, this.now, load);
+  }
+}
+
+/**
+ * Answers from the cache when an identical search is stored and fresh, otherwise runs `load` and
+ * keeps its result for `ttlMs`. Shared by every search that spends the provider's quota, so flight
+ * and stay searches cache the same way. Cache failures never block a search.
+ */
+export async function readThroughCache<T extends { cached?: boolean }>(
+  store: FlightCacheStore,
+  key: string,
+  ttlMs: number,
+  now: () => Date,
+  load: () => Promise<T>,
+): Promise<T> {
+  try {
+    const hit = (await store.get(key, now())) as T | null;
+    if (hit) return { ...hit, cached: true };
+  } catch (error) {
+    // A cache that can't be read only costs a search; it never blocks one.
+    console.error(
+      "[search-cache] read failed:",
+      error instanceof Error ? error.message : "unknown",
+    );
+  }
+  const result = await load();
+  if (ttlMs > 0) {
     try {
-      const hit = (await this.store.get(
+      await store.set(
         key,
-        this.now(),
-      )) as FlightSearchResult | null;
-      if (hit) return { ...hit, cached: true };
+        { ...result, cached: false },
+        new Date(now().getTime() + ttlMs),
+      );
     } catch (error) {
-      // A cache that can't be read only costs a search; it never blocks one.
       console.error(
-        "[flights] cache read failed:",
+        "[search-cache] write failed:",
         error instanceof Error ? error.message : "unknown",
       );
     }
-    const result = await load();
-    if (this.ttlMs > 0) {
-      try {
-        await this.store.set(
-          key,
-          { ...result, cached: false },
-          new Date(this.now().getTime() + this.ttlMs),
-        );
-      } catch (error) {
-        console.error(
-          "[flights] cache write failed:",
-          error instanceof Error ? error.message : "unknown",
-        );
-      }
-    }
-    return { ...result, cached: false };
   }
+  return { ...result, cached: false };
 }

@@ -20,6 +20,7 @@ import {
 import {
   formatMinutes,
   isTimeOfDay,
+  minutesToTime,
   timeToMinutes,
   toDateOnly,
 } from "@/lib/dates";
@@ -29,6 +30,11 @@ import {
   nextResultId,
 } from "@/lib/domain/flight-match";
 import { nextTopics } from "@/lib/domain/follow-up";
+import {
+  describeShownStay,
+  matchShownStays,
+  nextStayResultId,
+} from "@/lib/domain/stay-match";
 import {
   applyStopOps,
   describeStops,
@@ -64,9 +70,20 @@ import {
 } from "@/lib/flights";
 import { maskEmail, normalizeEmail } from "@/lib/domain/invitations";
 import { BOOKING_CATEGORY_SINGULAR, TRIP_THEME_LABELS } from "@/lib/labels";
+import {
+  MAX_STAY_BEDROOMS,
+  MAX_STAY_GUESTS,
+  STAY_KINDS,
+  STAY_SORTS,
+  clockToMinutes,
+  describeStay,
+  describeStayPrice,
+  type StayOffer,
+} from "@/lib/stays";
 import { INVITE_TTL_CHOICES } from "@/lib/validation/invitation";
 import { bookingFormSchema } from "@/lib/validation/booking";
 import { flightSearchFormSchema } from "@/lib/validation/flights";
+import { staySearchFormSchema } from "@/lib/validation/stays";
 import type { TripAccess } from "@/server/access";
 import type { CurrentUser } from "@/server/auth/session";
 import { inviteUrl } from "@/server/app-url";
@@ -89,6 +106,8 @@ import {
   searchFlights,
   searchReturnFlights,
 } from "@/server/services/flights";
+import type { StaySearchProvider, StaySearchResult } from "@/server/stays";
+import { saveStayOffer, searchStays } from "@/server/services/stays";
 import {
   createBooking,
   findExistingBooking,
@@ -163,6 +182,10 @@ export type TripContext = BaseContext & {
   flightResults: Map<string, FlightOffer>;
   /** Result IDs first shown in this turn, saved with the reply so later turns can use them. */
   newFlightResultIds: string[];
+  stays: StaySearchProvider | null;
+  /** Stay results shown in this conversation, including earlier turns, by result ID. */
+  stayResults: Map<string, StayOffer>;
+  newStayResultIds: string[];
   /** What invite tools need. Absent where invites can't be made, such as some tests. */
   invites?: InviteContext;
 };
@@ -1244,6 +1267,193 @@ const saveFlightTool = defineTool({
 });
 
 // ---------------------------------------------------------------------------
+// Stays
+// ---------------------------------------------------------------------------
+
+/** Keeps results for save_stay_option and record_booking, and shapes the tool output. */
+function stayToolOutput(context: TripContext, result: StaySearchResult) {
+  const listed = result.offers.slice(0, 6).map((offer) => {
+    const id = nextStayResultId(context.stayResults.keys());
+    context.stayResults.set(id, offer);
+    context.newStayResultIds.push(id);
+    return {
+      resultId: id,
+      name: offer.name,
+      details: describeStay(offer),
+      price: describeStayPrice(offer),
+      priceSources: offer.priceSources.map((price) => price.source),
+      sponsored: offer.sponsored,
+      checkInTime: offer.checkInTime,
+      checkOutTime: offer.checkOutTime,
+      link: offer.bookingUrl,
+      propertyWebsite: offer.propertyUrl,
+    };
+  });
+  return {
+    available: true,
+    dataNotice: `Prices are the lowest ${result.sourceName} showed at retrieval, including taxes and fees, for ${result.search.guests} guests. They can change before booking. Google Hotels has no room-count filter, so say the user should check how many rooms or beds a price covers. A hotel search can include vacation rentals; each result's details say which it is. This app does not book stays.`,
+    source: result.sourceName,
+    retrievedAt: result.retrievedAt,
+    reusedEarlierSearch: result.cached ?? false,
+    search: result.search,
+    results: listed,
+  };
+}
+
+const searchStaysTool = defineTool({
+  name: "search_stays",
+  description:
+    "Search hotels or vacation rentals with the configured stay provider. Call it only when the user wants places to stay or their prices. Returns places with type, rating, nightly and total price with currency, the sites the prices came from, source, retrieval time, and a link to book elsewhere, or says stay search is unavailable. Only state stay details that this tool returned. It cannot search Airbnb directly; for a listing the user found there, they add it from its link in Bookings > Accommodations.",
+  args: z.object({
+    location: z
+      .string()
+      .describe(
+        "Town, area, or address to stay near, such as Park City, Utah. Use a trip stop when the user means one.",
+      ),
+    checkIn: z.string().regex(DATE_PATTERN).describe("YYYY-MM-DD."),
+    checkOut: z.string().regex(DATE_PATTERN).describe("YYYY-MM-DD."),
+    guests: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        `Guests, 1 to ${MAX_STAY_GUESTS}. null uses the trip's group size.`,
+      ),
+    kind: z
+      .enum(STAY_KINDS)
+      .describe(
+        "hotel, or vacation_rental for a house, condo, or cabin. Asking for bedrooms means vacation_rental.",
+      ),
+    bedrooms: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        `Minimum bedrooms, up to ${MAX_STAY_BEDROOMS}. Vacation rentals only; null for any.`,
+      ),
+    minPrice: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Lowest nightly price in USD, or null."),
+    maxPrice: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Highest nightly price in USD, or null."),
+    sort: z.enum(STAY_SORTS).nullable().describe("null means best match."),
+  }),
+  phases: ["trip"],
+  async run(context, args) {
+    if (context.phase !== "trip") return {};
+    if (!context.stays) {
+      context.effects.push({
+        tool: this.name,
+        ok: false,
+        kind: "searched",
+        summary: "Stay search is not configured",
+      });
+      return {
+        available: false,
+        message:
+          "Stay search is not configured, so there are no hotel or rental results. Do not quote places, prices, or availability. The user can add a place they found from its link in Bookings > Accommodations.",
+      };
+    }
+    if (
+      args.kind === "vacation_rental" &&
+      !context.stays.supportsVacationRentals
+    ) {
+      return {
+        available: false,
+        message: `${context.stays.label} can only search hotels, not vacation rentals. Say so, and offer a hotel search or adding a rental from its link in Bookings > Accommodations.`,
+      };
+    }
+    let guests = args.guests;
+    if (guests === null) {
+      const trip = await db.trip.findUniqueOrThrow({
+        where: { id: context.access.tripId },
+        select: { groupSize: true },
+      });
+      guests = trip.groupSize ?? 2;
+    }
+    const parsed = staySearchFormSchema.safeParse({
+      location: args.location,
+      checkIn: args.checkIn,
+      checkOut: args.checkOut,
+      guests: String(Math.min(Math.max(guests, 1), MAX_STAY_GUESTS)),
+      kind: args.kind,
+      bedrooms: args.bedrooms === null ? "" : String(args.bedrooms),
+      minPrice: args.minPrice === null ? "" : String(args.minPrice),
+      maxPrice: args.maxPrice === null ? "" : String(args.maxPrice),
+      sort: args.sort ?? "relevance",
+    });
+    if (!parsed.success) {
+      throw new DomainError(
+        "VALIDATION",
+        `No search was run. ${parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
+      );
+    }
+    const result = await searchStays(context.stays, parsed.data);
+    const output = stayToolOutput(context, result);
+    context.effects.push({
+      tool: this.name,
+      ok: true,
+      kind: "searched",
+      summary: `Searched ${result.sourceName} for ${args.kind === "vacation_rental" ? "vacation rentals" : "hotels"} in ${result.search.location} (${output.results.length} results${result.cached ? ", reused from an earlier search" : ""})`,
+    });
+    return output;
+  },
+});
+
+const saveStayTool = defineTool({
+  name: "save_stay_option",
+  description:
+    "Save one place from search_stays to the trip with its source, price, retrieval time, and map location. By default it is saved to options for the group to review. With asConsidering it is also added to Bookings > Accommodations with the user as considering it. It is never marked booked and nothing is reserved. If the user says they already booked it, use record_booking with fromShownStay instead.",
+  args: z.object({
+    resultId: z.string().describe("resultId from search_stays."),
+    asConsidering: z
+      .boolean()
+      .describe(
+        "true when the user wants it in Bookings as something they are considering.",
+      ),
+  }),
+  phases: ["trip"],
+  async run(context, args) {
+    if (context.phase !== "trip") return {};
+    const offer = context.stayResults.get(args.resultId);
+    if (!offer) {
+      throw new DomainError(
+        "VALIDATION",
+        `Unknown resultId "${args.resultId}". Search stays first.`,
+      );
+    }
+    const saved = await saveStayOffer(context.access, offer, {
+      asBooking: args.asConsidering,
+    });
+    context.effects.push({
+      tool: this.name,
+      ok: true,
+      kind: "saved",
+      summary: args.asConsidering
+        ? `Added "${offer.name}" to Accommodations as considering`
+        : saved.alreadySaved
+          ? `"${offer.name}" was already in options`
+          : `Saved "${offer.name}" to options`,
+      ...(saved.bookingId
+        ? { entityId: saved.bookingId, entityType: "booking" as const }
+        : { entityId: saved.optionId }),
+    });
+    return {
+      saved: true,
+      alreadySaved: saved.alreadySaved,
+      optionId: saved.optionId,
+      bookingId: saved.bookingId,
+      status: args.asConsidering ? "CONSIDERING (not booked)" : "SUGGESTED",
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Suggestions
 // ---------------------------------------------------------------------------
 
@@ -1553,7 +1763,17 @@ type RawBooking = {
   costIsEstimate: boolean;
   costSplit: "SHARED_EQUALLY" | "PER_PERSON";
   notes: string;
+  locationName?: string;
+  address?: string;
+  /** A stay from search results, saved as an option with its coordinates and linked. */
+  stayOffer?: StayOffer;
 };
+
+/** HH:MM from a source's "3:00 PM", or "" when it can't be read. */
+function stayClock(value: string | null) {
+  const minutes = clockToMinutes(value);
+  return minutes === null ? "" : minutesToTime(minutes);
+}
 
 const recordBookingArgs = z.object({
   category: z.enum(BookingCategory),
@@ -1596,12 +1816,27 @@ const recordBookingArgs = z.object({
     .describe(
       "Use for a flight from search results shown earlier in this conversation. Fill in what the user said about it; the app finds the exact result or reports that it is ambiguous.",
     ),
+  fromShownStay: z
+    .object({
+      resultId: z
+        .string()
+        .nullable()
+        .describe("resultId of a stay shown earlier, only if you are sure."),
+      name: z
+        .string()
+        .nullable()
+        .describe("All or part of the place's name, as the user said it."),
+    })
+    .nullable()
+    .describe(
+      "Use for a stay from search_stays results shown earlier in this conversation. The app finds the exact result or reports that it is ambiguous.",
+    ),
   title: z.string().nullable(),
   provider: z
     .string()
     .nullable()
     .describe(
-      "Airline, hotel, company, or who is driving (for example 'Friend driving').",
+      "Airline, hotel, company, listing site such as Airbnb, or who is driving (for example 'Friend driving').",
     ),
   reference: z
     .string()
@@ -1609,6 +1844,11 @@ const recordBookingArgs = z.object({
     .describe("Flight number or confirmation code, if the user gave one."),
   fromLocation: z.string().nullable(),
   toLocation: z.string().nullable(),
+  locationName: z
+    .string()
+    .nullable()
+    .describe("For a stay: the town or area, such as Park City."),
+  address: z.string().nullable().describe("For a stay: the address, if given."),
   startDate: z.string().regex(DATE_PATTERN).nullable(),
   startTime: z.string().nullable().describe("Local time as HH:MM, 24-hour."),
   endDate: z.string().regex(DATE_PATTERN).nullable(),
@@ -1629,7 +1869,7 @@ const recordBookingArgs = z.object({
 const recordBookingTool = defineTool({
   name: "record_booking",
   description:
-    "Record something the user says is already booked or arranged: a flight they bought, a stay they reserved, or a ground leg such as a friend driving them between stops. For themselves or a named trip member. The user's statement is enough; do not ask the group to confirm. It is saved in Bookings as booked for those travelers, never as confirmed with the airline or provider. For a flight from search results shown earlier, fill fromShownFlight instead of copying details.",
+    "Record something the user says is already booked or arranged: a flight they bought, a stay they reserved, or a ground leg such as a friend driving them between stops. For themselves or a named trip member. The user's statement is enough; do not ask the group to confirm. It is saved in Bookings as booked for those travelers, never as confirmed with the airline or provider. For a flight from search results shown earlier, fill fromShownFlight instead of copying details; for a stay shown earlier, fill fromShownStay. A stay is an ACCOMMODATION with check-in as startDate and check-out as endDate.",
   args: recordBookingArgs,
   phases: ["trip"],
   async run(context, args) {
@@ -1642,8 +1882,12 @@ const recordBookingTool = defineTool({
         );
     }
     const memberIds = await resolveTravelers(context, args.travelers);
-    // A flight picked from search results is a flight, whatever category was sent.
-    const category = args.fromShownFlight ? "FLIGHT" : args.category;
+    // A result picked from flight or stay search is that kind, whatever category was sent.
+    const category = args.fromShownFlight
+      ? "FLIGHT"
+      : args.fromShownStay
+        ? "ACCOMMODATION"
+        : args.category;
     const trip = await db.trip.findUniqueOrThrow({
       where: { id: context.access.tripId },
       select: { currency: true },
@@ -1735,6 +1979,70 @@ const recordBookingTool = defineTool({
             .join("\n"),
         });
       });
+    } else if (args.fromShownStay) {
+      const shown = [...context.stayResults.entries()].map(
+        ([resultId, offer]) => ({ resultId, offer }),
+      );
+      const matches = matchShownStays(shown, args.fromShownStay);
+      if (matches.length === 0) {
+        return {
+          recorded: false,
+          notFound: true,
+          message:
+            "No stay shown earlier in this conversation fits that. Nothing was recorded. Ask the user for the place, dates, and price, or record it from what they said without fromShownStay.",
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          recorded: false,
+          ambiguous: true,
+          candidates: matches.slice(0, 6).map((match) => ({
+            resultId: match.resultId,
+            stay: describeShownStay(match),
+          })),
+          message:
+            "More than one stay shown earlier fits. Nothing was recorded. Ask the user which one they booked.",
+        };
+      }
+      const [{ offer }] = matches as [(typeof matches)[number]];
+      offerId = offer.offerId;
+      // The search price stands in until the user says what they paid, and says so.
+      const searchPrice =
+        !args.costAmount && (offer.totalAmount ?? offer.nightlyAmount)
+          ? {
+              costAmount: (offer.totalAmount ?? offer.nightlyAmount)!,
+              currency: offer.currency,
+              costIsEstimate: true,
+              costSplit: "SHARED_EQUALLY" as const,
+            }
+          : null;
+      rows.push({
+        title: (args.title?.trim() || offer.name).slice(0, 200),
+        provider: args.provider ?? "",
+        url: offer.propertyUrl ?? offer.bookingUrl,
+        reference: args.reference ?? "",
+        startDate: offer.checkIn,
+        startTime: stayClock(offer.checkInTime),
+        endDate: offer.checkOut,
+        endTime: stayClock(offer.checkOutTime),
+        fromLocation: "",
+        toLocation: "",
+        locationName: offer.location,
+        address: args.address ?? "",
+        ...(searchPrice ?? stated),
+        notes: [
+          provenance,
+          `From ${offer.sourceName} results shown on ${offer.retrievedAt.slice(0, 10)}.${
+            searchPrice
+              ? ` Price is the ${offer.totalAmount ? `total for ${offer.nights === 1 ? "1 night" : `${offer.nights} nights`}` : "nightly rate"} Google Hotels showed then; update it with what was paid.`
+              : ""
+          }`,
+          args.notes,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        stayOffer: offer,
+      });
     } else {
       const route =
         args.fromLocation && args.toLocation
@@ -1756,13 +2064,15 @@ const recordBookingTool = defineTool({
         endTime: args.endTime ?? "",
         fromLocation: args.fromLocation ?? "",
         toLocation: args.toLocation ?? "",
+        locationName: args.locationName ?? "",
+        address: args.address ?? "",
         ...stated,
         notes: [provenance, args.notes].filter(Boolean).join("\n"),
       });
     }
 
     const recorded: { id: string; title: string; created: boolean }[] = [];
-    for (const row of rows) {
+    for (const { stayOffer, ...row } of rows) {
       const existing = await findExistingBooking(context.access, {
         category,
         title: row.title,
@@ -1799,6 +2109,13 @@ const recordBookingTool = defineTool({
           "VALIDATION",
           `Nothing was recorded. ${parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
         );
+      }
+      if (stayOffer) {
+        // Keeps the place as an option too, with its coordinates for the map.
+        const saved = await saveStayOffer(context.access, stayOffer, {
+          asBooking: false,
+        });
+        parsed.data.researchOptionId = saved.optionId;
       }
       const booking = await createBooking(context.access, parsed.data);
       recorded.push({ id: booking.id, title: booking.title, created: true });
@@ -2074,6 +2391,8 @@ const ALL_TOOLS: AtlasTool<any>[] = [
   searchFlightsTool,
   searchReturnFlightsTool,
   saveFlightTool,
+  searchStaysTool,
+  saveStayTool,
   suggestTaskTool,
   suggestThemeTasksTool,
   proposeEventTool,

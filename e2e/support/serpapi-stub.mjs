@@ -1,9 +1,11 @@
 /**
- * A tiny local stand-in for SerpApi's Google Flights API, used only by the Playwright suite.
+ * A tiny local stand-in for SerpApi's Google Flights and Google Hotels APIs, used only by the
+ * Playwright suite.
  *
  * The app under test uses its real SerpApi provider; the suite points SERPAPI_API_URL here so the
  * request, response mapping, labelling, caching, and error handling run end to end without
- * spending real searches. An arrival of "ERR" simulates an outage and "QQQ" an exhausted quota.
+ * spending real searches. An arrival of "ERR" simulates an outage and "QQQ" an exhausted quota; a
+ * hotel search for "Outage Town" or "Quota Town" does the same for stays.
  * GET /stats reports how many searches reached the stub, so tests can prove the cache works.
  */
 import { createServer } from "node:http";
@@ -72,7 +74,114 @@ const PLACES = {
   ],
 };
 
-const stats = { google_flights: 0, google_flights_autocomplete: 0 };
+const stats = {
+  google_flights: 0,
+  google_flights_autocomplete: 0,
+  google_hotels: 0,
+};
+
+/** Two hotels and two rentals, shaped like SerpApi's documented Google Hotels response. */
+function hotels(params) {
+  const adults = Number(params.get("adults") ?? 2);
+  const rentals = params.get("vacation_rentals") === "true";
+  const nights = Math.round(
+    (Date.parse(params.get("check_out_date")) -
+      Date.parse(params.get("check_in_date"))) /
+      86_400_000,
+  );
+  const rate = (nightly) => ({
+    rate_per_night: { lowest: `$${nightly}`, extracted_lowest: nightly },
+    total_rate: {
+      lowest: `$${nightly * nights}`,
+      extracted_lowest: nightly * nights,
+    },
+  });
+  const image = (id) => [
+    {
+      thumbnail: `https://images.e2e.invalid/${id}-thumb.jpg`,
+      original_image: `https://images.e2e.invalid/${id}.jpg`,
+    },
+  ];
+  if (rentals) {
+    const bedrooms = Number(params.get("bedrooms") ?? 0);
+    return [
+      {
+        type: "vacation rental",
+        name: "Stub Old Town Chalet",
+        property_token: "stub_chalet",
+        gps_coordinates: { latitude: 40.6461, longitude: -111.498 },
+        check_in_time: "4:00 PM",
+        check_out_time: "10:00 AM",
+        ...rate(650 + adults * 5),
+        prices: [
+          {
+            source: "Vrbo",
+            rate_per_night: { extracted_lowest: 650 + adults * 5 },
+          },
+        ],
+        images: image("chalet"),
+        overall_rating: 4.8,
+        reviews: 57,
+        essential_info: ["Entire house", "Sleeps 10", "4 bedrooms"],
+      },
+      {
+        type: "vacation rental",
+        name: "Stub Two-Bedroom Condo",
+        property_token: "stub_condo",
+        gps_coordinates: { latitude: 40.651, longitude: -111.507 },
+        ...rate(310),
+        prices: [
+          {
+            source: "Bluepillow.com",
+            rate_per_night: { extracted_lowest: 310 },
+          },
+        ],
+        overall_rating: 4.2,
+        reviews: 18,
+        essential_info: ["Entire condo", "Sleeps 6", "2 bedrooms"],
+      },
+    ].filter((rental) =>
+      bedrooms > 2 ? rental.name.includes("Chalet") : true,
+    );
+  }
+  return [
+    {
+      type: "hotel",
+      name: "Stub Summit Lodge",
+      description: "Slopeside lodge.",
+      link: "https://www.summitlodge.stub.example/",
+      property_token: "stub_lodge",
+      gps_coordinates: { latitude: 40.6514, longitude: -111.5079 },
+      check_in_time: "4:00 PM",
+      check_out_time: "11:00 AM",
+      ...rate(412),
+      prices: [
+        { source: "Expedia", rate_per_night: { extracted_lowest: 430 } },
+        { source: "Booking.com", rate_per_night: { extracted_lowest: 412 } },
+      ],
+      hotel_class: "4-star hotel",
+      extracted_hotel_class: 4,
+      images: image("lodge"),
+      overall_rating: 4.6,
+      reviews: 812,
+      amenities: ["Pool", "Hot tub"],
+    },
+    {
+      type: "hotel",
+      name: "Stub Main Street Inn",
+      property_token: "stub_inn",
+      sponsored: true,
+      gps_coordinates: { latitude: 40.6433, longitude: -111.4952 },
+      ...rate(189),
+      hotel_class: "3-star hotel",
+      extracted_hotel_class: 3,
+      overall_rating: 4.1,
+      reviews: 230,
+    },
+    // Google sometimes lists a place without a rate for the dates; the app leaves it out.
+    { type: "hotel", name: "Stub Sold Out Hotel", property_token: "stub_full" },
+  ];
+}
 
 const CITIES = {
   JFK: "New York",
@@ -303,6 +412,25 @@ const server = createServer((request, response) => {
         position: index + 1,
         ...place,
       })),
+    });
+    return;
+  }
+  if (engine === "google_hotels") {
+    const q = params.get("q") ?? "";
+    if (/outage town/i.test(q)) {
+      send(response, 503, { error: "Internal error." });
+      return;
+    }
+    if (/quota town/i.test(q)) {
+      send(response, 429, { error: "Your account has run out of searches." });
+      return;
+    }
+    send(response, 200, {
+      search_metadata: { id: "stub", status: "Success" },
+      search_parameters: Object.fromEntries(
+        [...params].filter(([key]) => key !== "api_key"),
+      ),
+      properties: hotels(params),
     });
     return;
   }

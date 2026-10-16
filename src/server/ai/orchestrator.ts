@@ -4,6 +4,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { ASSISTANT_NAME } from "@/config/brand";
 import { todayDateOnly } from "@/lib/dates";
 import { isShownFlight, type ShownFlight } from "@/lib/domain/flight-match";
+import { isShownStay, type ShownStay } from "@/lib/domain/stay-match";
 import { THEME_TASKS } from "@/lib/domain/theme";
 import {
   isEstablishable,
@@ -22,6 +23,7 @@ import {
 } from "@/server/research";
 import { getEmailProvider, type EmailProvider } from "@/server/email";
 import { getFlightProvider, type FlightSearchProvider } from "@/server/flights";
+import { getStayProvider, type StaySearchProvider } from "@/server/stays";
 import { getOwnConversation } from "@/server/services/conversations";
 import { createTripFromDraft, loadTripDraft } from "@/server/services/trips";
 
@@ -43,7 +45,7 @@ import {
 
 export const MAX_MESSAGE_LENGTH = 4000;
 const HISTORY_TURNS = 30;
-/** How many recent replies to scan for flight results Atlas showed. */
+/** How many recent replies to scan for flight and stay results Atlas showed. */
 const FLIGHT_RESULT_MESSAGES = 12;
 const MAX_SHOWN_FLIGHTS = 24;
 const MAX_TOOL_ROUNDS = 5;
@@ -62,6 +64,8 @@ export type MessageMetadata = {
   sources?: MessageSource[];
   /** Flight results first shown with this reply, kept so later turns can refer back to them. */
   flightResults?: ShownFlight[];
+  /** Stay results first shown with this reply, kept so later turns can refer back to them. */
+  stayResults?: ShownStay[];
   error?: ProviderErrorKind;
 };
 
@@ -76,6 +80,7 @@ type Dependencies = {
   provider?: LlmProvider | null;
   research?: ResearchProvider;
   flights?: FlightSearchProvider | null;
+  stays?: StaySearchProvider | null;
   /** Email for invitations Atlas sends. Defaults to the configured provider, if any. */
   email?: EmailProvider | null;
   /** Public origin for invite links. Without it, Atlas can't create invites. */
@@ -143,11 +148,13 @@ export async function sendAtlasMessage(
   const research = deps.research ?? getResearchProvider();
   const flights =
     deps.flights === undefined ? getFlightProvider() : deps.flights;
+  const stays = deps.stays === undefined ? getStayProvider() : deps.stays;
 
   let context: AtlasContext;
   let draftForPrompt: TripDraft;
   let memberNames: string[] | undefined;
   let shownFlights: ShownFlight[] = [];
+  let shownStays: ShownStay[] = [];
   let themeTasksPending = false;
   const startMode = conversation.startMode ?? "MANUAL";
 
@@ -156,7 +163,10 @@ export async function sendAtlasMessage(
     draftForPrompt = loaded.draft;
     memberNames = loaded.memberNames;
     themeTasksPending = loaded.themeTasksPending;
-    shownFlights = await loadShownFlights(conversation.id);
+    [shownFlights, shownStays] = await Promise.all([
+      loadShownFlights(conversation.id),
+      loadShownStays(conversation.id),
+    ]);
     context = {
       phase: "trip",
       user,
@@ -171,6 +181,11 @@ export async function sendAtlasMessage(
         shownFlights.map((item) => [item.resultId, item.offer]),
       ),
       newFlightResultIds: [],
+      stays,
+      stayResults: new Map(
+        shownStays.map((item) => [item.resultId, item.offer]),
+      ),
+      newStayResultIds: [],
       invites: deps.appUrl
         ? {
             appUrl: deps.appUrl,
@@ -218,6 +233,13 @@ export async function sendAtlasMessage(
     flightSource: flights?.label,
     soloTrip: context.phase === "trip" ? context.soloTrip : true,
     shownFlights,
+    staySearch: !stays
+      ? "off"
+      : stays.supportsVacationRentals
+        ? "live"
+        : "hotels_only",
+    staySource: stays?.label,
+    shownStays,
     themeTasksPending,
   });
 
@@ -237,6 +259,7 @@ export async function sendAtlasMessage(
         : [];
     const flightResults =
       context.phase === "trip" ? newFlightResults(context) : [];
+    const stayResults = context.phase === "trip" ? newStayResults(context) : [];
     await db.message.create({
       data: {
         conversationId: conversation.id,
@@ -250,6 +273,7 @@ export async function sendAtlasMessage(
           effects,
           ...(sources.length > 0 ? { sources } : {}),
           ...(flightResults.length > 0 ? { flightResults } : {}),
+          ...(stayResults.length > 0 ? { stayResults } : {}),
         } satisfies MessageMetadata as unknown as Prisma.InputJsonValue,
       },
     });
@@ -275,6 +299,7 @@ export async function sendAtlasMessage(
     ].join(" ");
     const flightResults =
       context.phase === "trip" ? newFlightResults(context) : [];
+    const stayResults = context.phase === "trip" ? newStayResults(context) : [];
     await db.message.create({
       data: {
         conversationId: conversation.id,
@@ -287,6 +312,7 @@ export async function sendAtlasMessage(
           effects,
           error: kind,
           ...(flightResults.length > 0 ? { flightResults } : {}),
+          ...(stayResults.length > 0 ? { stayResults } : {}),
         } satisfies MessageMetadata as unknown as Prisma.InputJsonValue,
       },
     });
@@ -302,6 +328,35 @@ export async function sendAtlasMessage(
     return { replied, tripId, tripCreated: true, effects };
   }
   return { replied, tripId: conversation.tripId, tripCreated: false, effects };
+}
+
+function newStayResults(context: {
+  stayResults: Map<string, ShownStay["offer"]>;
+  newStayResultIds: string[];
+}): ShownStay[] {
+  return context.newStayResultIds.flatMap((resultId) => {
+    const offer = context.stayResults.get(resultId);
+    return offer ? [{ resultId, offer }] : [];
+  });
+}
+
+/** Stay results shown in this conversation's recent replies, oldest first. */
+export async function loadShownStays(
+  conversationId: string,
+): Promise<ShownStay[]> {
+  const recent = await db.message.findMany({
+    where: { conversationId, role: { in: ["ASSISTANT", "NOTICE"] } },
+    orderBy: { createdAt: "desc" },
+    take: FLIGHT_RESULT_MESSAGES,
+    select: { metadata: true },
+  });
+  const shown: ShownStay[] = [];
+  for (const message of recent.reverse()) {
+    const metadata = message.metadata as { stayResults?: unknown } | null;
+    if (!Array.isArray(metadata?.stayResults)) continue;
+    shown.push(...metadata.stayResults.filter(isShownStay));
+  }
+  return shown.slice(-MAX_SHOWN_FLIGHTS);
 }
 
 function newFlightResults(context: {

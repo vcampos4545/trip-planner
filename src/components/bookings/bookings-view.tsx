@@ -111,6 +111,11 @@ const CATEGORY_ORDER: BookingCategory[] = [
   "OTHER",
 ];
 
+const SECTION_ANCHORS: Partial<Record<BookingCategory, string>> = {
+  FLIGHT: "flights",
+  ACCOMMODATION: "stays",
+};
+
 const EMPTY_HINTS: Record<BookingCategory, string> = {
   FLIGHT:
     "No flights recorded. Each person can add theirs, or join a flight someone else added.",
@@ -170,6 +175,7 @@ export function BookingsView({
   prefill,
   editId = null,
   flightSearch,
+  staySearch,
 }: {
   tripId: string;
   bookings: BookingView[];
@@ -184,6 +190,8 @@ export function BookingsView({
   editId?: string | null;
   /** Flight search, shown at the top of the Flights section. */
   flightSearch?: React.ReactNode;
+  /** Stay search and adding a stay from a link, shown at the top of Accommodations. */
+  staySearch?: React.ReactNode;
 }) {
   const router = useRouter();
   return (
@@ -208,7 +216,7 @@ export function BookingsView({
         return (
           <section
             key={category}
-            id={category === "FLIGHT" ? "flights" : undefined}
+            id={SECTION_ANCHORS[category]}
             aria-labelledby={`bookings-${category}`}
             className="scroll-mt-20 space-y-3"
             data-testid={`bookings-section-${category.toLowerCase()}`}
@@ -242,6 +250,7 @@ export function BookingsView({
               />
             </div>
             {category === "FLIGHT" ? flightSearch : null}
+            {category === "ACCOMMODATION" ? staySearch : null}
             {items.length === 0 ? (
               <p className="rounded-xl border border-dashed px-4 py-3 text-sm text-muted-foreground">
                 {EMPTY_HINTS[category]}
