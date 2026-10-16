@@ -1,7 +1,7 @@
-import { Bookmark, Plus, SearchX } from "lucide-react";
-import type { Metadata } from "next";
+import { Bookmark, Plane, Plus, SearchX } from "lucide-react";
+import type { Metadata, Route } from "next";
+import Link from "next/link";
 
-import { FlightSearchPanel } from "@/components/flights/flight-search-panel";
 import { OptionFormDialog } from "@/components/options/option-form-dialog";
 import { OptionsBoard } from "@/components/options/options-board";
 import { OptionsToolbar } from "@/components/options/options-toolbar";
@@ -11,13 +11,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ASSISTANT_NAME } from "@/config/brand";
 import { OptionCategory, OptionStatus } from "@/generated/prisma/enums";
-import { todayDateOnly } from "@/lib/dates";
 import { serialize } from "@/lib/serialize";
-import { flightSearchDefaults } from "@/lib/validation/flights";
 import { requireTripAccess } from "@/server/access";
 import { requireUser } from "@/server/auth/session";
 import { db } from "@/server/db";
-import { getFlightSearchStatus } from "@/server/flights";
 import { orNotFound } from "@/server/not-found";
 import { getResearchProvider } from "@/server/research";
 import { listOptions, OPTION_PAGE_SIZE } from "@/server/services/research";
@@ -52,18 +49,10 @@ export default async function OptionsPage({
     listOptions(access, { category, status: statusParam, query: search }),
     db.trip.findUniqueOrThrow({
       where: { id: tripId },
-      select: {
-        currency: true,
-        departureLocation: true,
-        destination: true,
-        startDate: true,
-        endDate: true,
-        groupSize: true,
-      },
+      select: { currency: true },
     }),
   ]);
   const research = getResearchProvider();
-  const flights = getFlightSearchStatus();
   const filtered = Boolean(category || search || query.status);
 
   const addButton = (
@@ -108,19 +97,19 @@ export default async function OptionsPage({
           )}
         </Alert>
       ) : null}
-      <FlightSearchPanel
-        tripId={tripId}
-        status={
-          flights.configured
-            ? {
-                configured: true,
-                label: flights.label,
-                testMode: flights.testMode,
-              }
-            : { configured: false, reason: flights.reason }
-        }
-        defaults={flightSearchDefaults(trip, todayDateOnly())}
-      />
+      <p
+        className="flex items-center gap-1.5 text-sm text-muted-foreground"
+        data-testid="flight-search-pointer"
+      >
+        <Plane className="size-4" aria-hidden />
+        Looking for flights?
+        <Link
+          href={`/trips/${tripId}/bookings#flights` as Route}
+          className="font-medium text-primary hover:underline"
+        >
+          Search flights in Bookings
+        </Link>
+      </p>
       <OptionsToolbar />
       {options.length === 0 ? (
         <EmptyState

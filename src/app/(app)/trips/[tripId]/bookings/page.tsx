@@ -2,15 +2,19 @@ import type { Metadata } from "next";
 
 import { BookingsView } from "@/components/bookings/bookings-view";
 import { BudgetSummaryCard } from "@/components/bookings/budget-summary";
+import { FlightSearchPanel } from "@/components/flights/flight-search-panel";
 import { emptyBooking } from "@/lib/validation/form-defaults";
 import { PageHeader } from "@/components/shared/page-header";
 import type { BookingCategory, OptionCategory } from "@/generated/prisma/enums";
+import { todayDateOnly } from "@/lib/dates";
 import { summarizeBudget } from "@/lib/domain/budget";
 import { serialize } from "@/lib/serialize";
 import type { BookingFormInput } from "@/lib/validation/booking";
+import { flightSearchDefaults } from "@/lib/validation/flights";
 import { requireTripAccess } from "@/server/access";
 import { requireUser } from "@/server/auth/session";
 import { db } from "@/server/db";
+import { getFlightSearchStatus } from "@/server/flights";
 import { orNotFound } from "@/server/not-found";
 import { listBookings } from "@/server/services/bookings";
 import { listMembers } from "@/server/services/members";
@@ -46,6 +50,11 @@ export default async function BookingsPage({
         budgetCurrency: true,
         budgetBasis: true,
         groupSize: true,
+        departureLocation: true,
+        destination: true,
+        flyIntoAirport: true,
+        startDate: true,
+        endDate: true,
       },
     }),
     db.researchOption.findMany({
@@ -89,6 +98,9 @@ export default async function BookingsPage({
       participants: [],
     };
   }
+
+  const editId = typeof query.edit === "string" ? query.edit : null;
+  const flights = getFlightSearchStatus();
 
   const budget = summarizeBudget(
     bookings,
@@ -134,6 +146,22 @@ export default async function BookingsPage({
         isOrganizer={access.isOrganizer}
         currency={trip.currency}
         prefill={prefill}
+        editId={editId}
+        flightSearch={
+          <FlightSearchPanel
+            tripId={tripId}
+            status={
+              flights.configured
+                ? {
+                    configured: true,
+                    label: flights.label,
+                    testMode: flights.testMode,
+                  }
+                : { configured: false, reason: flights.reason }
+            }
+            defaults={flightSearchDefaults(trip, todayDateOnly())}
+          />
+        }
       />
     </div>
   );

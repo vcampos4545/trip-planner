@@ -16,7 +16,7 @@ import {
   UserMinus,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ConfirmAction } from "@/components/shared/confirm-button";
 import { BookingStatusBadge, Pill } from "@/components/shared/status-badge";
@@ -168,6 +168,8 @@ export function BookingsView({
   isOrganizer,
   currency,
   prefill,
+  editId = null,
+  flightSearch,
 }: {
   tripId: string;
   bookings: BookingView[];
@@ -178,6 +180,10 @@ export function BookingsView({
   isOrganizer: boolean;
   currency: string;
   prefill: BookingFormInput | null;
+  /** A booking to open for editing, for example from Atlas's "Edit" link. */
+  editId?: string | null;
+  /** Flight search, shown at the top of the Flights section. */
+  flightSearch?: React.ReactNode;
 }) {
   const router = useRouter();
   return (
@@ -202,8 +208,10 @@ export function BookingsView({
         return (
           <section
             key={category}
+            id={category === "FLIGHT" ? "flights" : undefined}
             aria-labelledby={`bookings-${category}`}
-            className="space-y-3"
+            className="scroll-mt-20 space-y-3"
+            data-testid={`bookings-section-${category.toLowerCase()}`}
           >
             <div className="flex items-center justify-between gap-2">
               <h2
@@ -233,6 +241,7 @@ export function BookingsView({
                 }
               />
             </div>
+            {category === "FLIGHT" ? flightSearch : null}
             {items.length === 0 ? (
               <p className="rounded-xl border border-dashed px-4 py-3 text-sm text-muted-foreground">
                 {EMPTY_HINTS[category]}
@@ -249,6 +258,10 @@ export function BookingsView({
                     currentMemberId={currentMemberId}
                     canDelete={
                       isOrganizer || booking.createdBy?.id === currentUserId
+                    }
+                    startEditing={booking.id === editId}
+                    onEditClosed={() =>
+                      router.replace(`/trips/${tripId}/bookings`)
                     }
                   />
                 ))}
@@ -268,6 +281,8 @@ function BookingCard({
   options,
   currentMemberId,
   canDelete,
+  startEditing = false,
+  onEditClosed,
 }: {
   tripId: string;
   booking: BookingView;
@@ -275,8 +290,16 @@ function BookingCard({
   options: { id: string; title: string }[];
   currentMemberId: string;
   canDelete: boolean;
+  startEditing?: boolean;
+  onEditClosed?: () => void;
 }) {
-  const [dialog, setDialog] = useState<"edit" | "delete" | null>(null);
+  const [dialog, setDialog] = useState<"edit" | "delete" | null>(
+    startEditing ? "edit" : null,
+  );
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (startEditing) ref.current?.scrollIntoView({ block: "center" });
+  }, [startEditing]);
   const { run, pending } = useAction();
   const cost = formatMoneyValue(booking.costAmount, booking.currency);
   const start = when(booking.startDate, booking.startMinute);
@@ -289,8 +312,10 @@ function BookingCard({
 
   return (
     <li
+      ref={ref}
+      id={`booking-${booking.id}`}
       className={cn(
-        "flex flex-col rounded-xl border bg-card p-4",
+        "flex scroll-mt-20 flex-col rounded-xl border bg-card p-4",
         cancelled && "opacity-60",
       )}
       data-testid="booking-card"
@@ -346,7 +371,10 @@ function BookingCard({
             members={members}
             options={options}
             open={dialog === "edit"}
-            onOpenChange={(open) => setDialog(open ? "edit" : null)}
+            onOpenChange={(open) => {
+              setDialog(open ? "edit" : null);
+              if (!open && startEditing) onEditClosed?.();
+            }}
           />
           {canDelete ? (
             <ConfirmAction
