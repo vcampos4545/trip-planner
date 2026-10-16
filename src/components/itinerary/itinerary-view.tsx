@@ -102,7 +102,7 @@ function mapsLink(event: EventView) {
     : null;
 }
 
-function toFormInput(event: EventView) {
+export function eventToFormInput(event: EventView) {
   return {
     title: event.title,
     kind: event.kind,
@@ -428,7 +428,7 @@ function EventRow({
       </DropdownMenu>
       <EventFormDialog
         tripId={tripId}
-        initial={toFormInput(event)}
+        initial={eventToFormInput(event)}
         editing={{ id: event.id, version: event.version }}
         links={links}
         tripStart={tripStart}
@@ -505,7 +505,7 @@ function SuggestionRow({
           </Button>
           <EventFormDialog
             tripId={tripId}
-            initial={toFormInput(event)}
+            initial={eventToFormInput(event)}
             editing={{ id: event.id, version: event.version }}
             isSuggestion
             links={links}
