@@ -40,6 +40,13 @@ treating each chat as a one-off.
   prices, votes, tasks, bookings with several travelers and cost splits, and a budget summary that
   keeps estimates apart from actual costs.
 
+Screenshots (from the end-to-end test data):
+[Bookings > Flights](docs/screenshots/bookings-flights.png),
+[itinerary week view](docs/screenshots/itinerary-week.png),
+[the same on a phone](docs/screenshots/itinerary-phone.png),
+[the Atlas panel](docs/screenshots/atlas-panel.png), and
+[where Atlas works from](docs/screenshots/atlas-panel-info.png).
+
 Trips that existed before stops and bookings-from-chat: the destination becomes the first stop
 when the migration runs. Flights you only told Atlas about earlier were saved as notes, not
 bookings. Open Atlas and say it again, for example "I bought the Southwest flight from LGA to SLC
