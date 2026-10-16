@@ -1,12 +1,14 @@
-import { CalendarDays, MapPin } from "lucide-react";
+import { CalendarDays, MapPin, Plane } from "lucide-react";
 
 import { Pill, StageBadge } from "@/components/shared/status-badge";
 import { TripDetailsEditButton } from "@/components/trips/details-editors";
+import { StopsEditorButton } from "@/components/trips/stops-editor";
 import { toTripDetailsFormInput } from "@/lib/validation/form-defaults";
 import { AvatarStack } from "@/components/user-avatar";
 import { TripMenu } from "@/components/workspace/trip-menu";
 import { TripTabs } from "@/components/workspace/trip-tabs";
 import { formatDateRange } from "@/lib/dates";
+import { describeAirports, describeStop } from "@/lib/domain/stops";
 import { requireUser } from "@/server/auth/session";
 import { db } from "@/server/db";
 import { orNotFound } from "@/server/not-found";
@@ -19,7 +21,9 @@ export default async function TripLayout({
 }: LayoutProps<"/trips/[tripId]">) {
   const { tripId } = await params;
   const user = await requireUser(`/trips/${tripId}`);
-  const { access, trip } = await orNotFound(getTripWorkspace(tripId, user.id));
+  const { access, trip, stops } = await orNotFound(
+    getTripWorkspace(tripId, user.id),
+  );
   const [suggestedTasks, suggestedEvents, proposals] = await Promise.all([
     db.task.count({ where: { tripId, status: "SUGGESTED" } }),
     db.itineraryEvent.count({ where: { tripId, status: "SUGGESTED" } }),
@@ -30,6 +34,11 @@ export default async function TripLayout({
     formatDateRange(details.startDate, details.endDate) ??
     trip.dateNotes ??
     "Dates not set";
+  const route =
+    stops.length > 1
+      ? stops.map((stop) => stop.name).join(" → ")
+      : (trip.destination ?? stops[0]?.name ?? null);
+  const airports = describeAirports(trip.flyIntoAirport, trip.flyOutOfAirport);
 
   return (
     <div className="flex flex-1 flex-col">
@@ -48,13 +57,30 @@ export default async function TripLayout({
                 {trip.isSample ? <Pill tone="warning">Sample data</Pill> : null}
               </div>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
-                <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="inline-flex items-center gap-1.5"
+                  data-testid="trip-route"
+                  title={
+                    stops.length > 1
+                      ? stops.map(describeStop).join(", then ")
+                      : undefined
+                  }
+                >
                   <MapPin className="size-3.5" aria-hidden />
-                  {trip.destination ?? "Destination not decided"}
-                  {trip.destination && !trip.destinationConfirmed
+                  {route ?? "Destination not decided"}
+                  {route && stops.length <= 1 && !trip.destinationConfirmed
                     ? " (tentative)"
                     : ""}
                 </span>
+                {airports ? (
+                  <span
+                    className="inline-flex items-center gap-1.5"
+                    data-testid="trip-airports"
+                  >
+                    <Plane className="size-3.5" aria-hidden />
+                    {airports}
+                  </span>
+                ) : null}
                 <span className="inline-flex items-center gap-1.5">
                   <CalendarDays className="size-3.5" aria-hidden />
                   {dates}
@@ -72,7 +98,20 @@ export default async function TripLayout({
                 </span>
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <StopsEditorButton
+                tripId={trip.id}
+                version={trip.version}
+                initial={{
+                  flyIntoAirport: trip.flyIntoAirport ?? "",
+                  flyOutOfAirport: trip.flyOutOfAirport ?? "",
+                  stops: stops.map((stop) => ({
+                    name: stop.name,
+                    startDate: stop.startDate ?? "",
+                    endDate: stop.endDate ?? "",
+                  })),
+                }}
+              />
               <TripDetailsEditButton
                 tripId={trip.id}
                 version={trip.version}

@@ -255,3 +255,17 @@ export function stopOnDate(stops: TripStopInput[], date: string) {
   }
   return match;
 }
+
+/** "In and out of SLC", "Into SLC, home from DEN", or null when neither is known. */
+export function describeAirports(
+  flyInto: string | null,
+  flyOutOf: string | null,
+): string | null {
+  if (flyInto && flyOutOf)
+    return flyInto.trim().toLowerCase() === flyOutOf.trim().toLowerCase()
+      ? `In and out of ${flyInto}`
+      : `Into ${flyInto}, home from ${flyOutOf}`;
+  if (flyInto) return `Into ${flyInto}`;
+  if (flyOutOf) return `Home from ${flyOutOf}`;
+  return null;
+}

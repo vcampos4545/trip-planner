@@ -93,6 +93,7 @@ export default async function NewTripConversationPage({
           </div>
           <TripDetailsSummary
             details={draft.details}
+            stops={draft.stops}
             candidateDestinations={draft.candidateDestinations}
             preferences={draft.preferences}
           />

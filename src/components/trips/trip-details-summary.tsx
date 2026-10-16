@@ -1,7 +1,11 @@
 import { Banknote, CalendarDays, Luggage, MapPin, Users } from "lucide-react";
 
 import { formatDateRange } from "@/lib/dates";
-import { describeStop, type TripStopInput } from "@/lib/domain/stops";
+import {
+  describeAirports,
+  describeStop,
+  type TripStopInput,
+} from "@/lib/domain/stops";
 import type { TripDetails } from "@/lib/domain/trip-details";
 import {
   ARRANGEMENT_LABELS,
@@ -112,14 +116,7 @@ export function TripDetailsSummary({
         </Row>
         {details.flyIntoAirport || details.flyOutOfAirport ? (
           <Row label="Flying">
-            {details.flyIntoAirport && details.flyOutOfAirport
-              ? details.flyIntoAirport.toLowerCase() ===
-                details.flyOutOfAirport.toLowerCase()
-                ? `In and out of ${details.flyIntoAirport}`
-                : `Into ${details.flyIntoAirport}, home from ${details.flyOutOfAirport}`
-              : details.flyIntoAirport
-                ? `Into ${details.flyIntoAirport}`
-                : `Home from ${details.flyOutOfAirport}`}
+            {describeAirports(details.flyIntoAirport, details.flyOutOfAirport)}
           </Row>
         ) : null}
       </Group>

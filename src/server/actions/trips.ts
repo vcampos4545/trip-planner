@@ -9,10 +9,12 @@ import {
   preferenceFormSchema,
   quickTripFormSchema,
   tripDetailsFormSchema,
+  tripRouteFormSchema,
   tripStageSchema,
 } from "@/lib/validation/trip";
 import { requireTripAccess } from "@/server/access";
 import { requireActionUser } from "@/server/auth/session";
+import { updateTripRoute } from "@/server/services/stops";
 import {
   addPreference,
   createManualTrip,
@@ -54,6 +56,20 @@ export async function updateTripDetailsAction(
       tripDetailsSchema.parse(input),
       z.number().int().parse(version),
     );
+    revalidateTrip(tripId);
+    return null;
+  });
+}
+
+export async function updateTripRouteAction(
+  tripId: string,
+  raw: unknown,
+  version: number,
+): Promise<ActionResult> {
+  return runAction(async (user) => {
+    const access = await requireTripAccess(tripId, user.id);
+    const input = tripRouteFormSchema.parse(raw);
+    await updateTripRoute(access, input, z.number().int().parse(version));
     revalidateTrip(tripId);
     return null;
   });
