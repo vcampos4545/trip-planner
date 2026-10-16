@@ -198,5 +198,21 @@ describe("parseDraft", () => {
   it("falls back to an empty draft for corrupt JSON", () => {
     expect(parseDraft({ details: { destination: 42 } })).toEqual(EMPTY_DRAFT);
     expect(parseDraft(null)).toEqual(EMPTY_DRAFT);
+    // Drafts saved before stops, airports, and themes existed still load.
+    const stored = {
+      details: { ...EMPTY_TRIP_DETAILS, destination: "Park City" } as Record<
+        string,
+        unknown
+      >,
+      preferences: [],
+      candidateDestinations: [],
+    };
+    delete stored.details.flyIntoAirport;
+    delete stored.details.flyOutOfAirport;
+    delete stored.details.theme;
+    expect(parseDraft(stored)).toEqual({
+      ...EMPTY_DRAFT,
+      details: { ...EMPTY_TRIP_DETAILS, destination: "Park City" },
+    });
   });
 });
