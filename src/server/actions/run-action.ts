@@ -42,6 +42,7 @@ export function toFailure(
       code: error.code,
       error: error.message,
       fieldErrors: error.fieldErrors,
+      ...(error.fieldChoices ? { fieldChoices: error.fieldChoices } : {}),
     };
   }
   if (error instanceof z.ZodError) {

@@ -164,6 +164,84 @@ export const NEW_YORK_SUGGESTIONS = {
   ],
 };
 
+function airport(id: string, name: string, city: string, distance: string) {
+  return { name, id, city, city_id: `/m/${id.toLowerCase()}`, distance };
+}
+
+/** Google's answer for "Lisbon", trimmed from a live response: the capital first, then towns. */
+export const LISBON_SUGGESTIONS = {
+  suggestions: [
+    {
+      position: 1,
+      name: "Lisbon, Portugal",
+      type: "city",
+      description: "Capital of Portugal",
+      id: "/m/04llb",
+      airports: [airport("LIS", "Humberto Delgado Airport", "Lisbon", "3 mi")],
+    },
+    {
+      position: 2,
+      name: "Lisbon, Maine",
+      type: "city",
+      description: "Town in Maine",
+      id: "/m/0tnkv",
+      airports: [
+        airport("PWM", "Portland International Jetport", "Portland", "28 mi"),
+        airport("AUG", "Augusta State Airport", "Augusta", "25 mi"),
+      ],
+    },
+    {
+      position: 3,
+      name: "Lisbon, Ohio",
+      type: "city",
+      description: "Village in Ohio",
+      id: "/m/0yv19",
+      airports: [
+        airport(
+          "PIT",
+          "Pittsburgh International Airport",
+          "Pittsburgh",
+          "34 mi",
+        ),
+      ],
+    },
+  ],
+};
+
+/** Two cities named Portland, each with its own airport, so the name alone is ambiguous. */
+export const PORTLAND_SUGGESTIONS = {
+  suggestions: [
+    {
+      position: 1,
+      name: "Portland, Oregon",
+      type: "city",
+      description: "City in Oregon",
+      id: "/m/02frhbc",
+      airports: [
+        airport("PDX", "Portland International Airport", "Portland", "9 mi"),
+      ],
+    },
+    {
+      position: 2,
+      name: "Portland, Maine",
+      type: "city",
+      description: "City in Maine",
+      id: "/m/0fvxg",
+      airports: [
+        airport("PWM", "Portland International Jetport", "Portland", "3 mi"),
+      ],
+    },
+  ],
+};
+
+/** Autocomplete answers by query, as the unit tests' mocked SerpApi returns them. */
+export const SUGGESTIONS_BY_QUERY: Record<string, unknown> = {
+  "new york": NEW_YORK_SUGGESTIONS,
+  "new york city": NEW_YORK_SUGGESTIONS,
+  lisbon: LISBON_SUGGESTIONS,
+  portland: PORTLAND_SUGGESTIONS,
+};
+
 /** An in-memory cache store with the same contract as the Postgres one. */
 export class MemoryFlightCache implements FlightCacheStore {
   readonly entries = new Map<string, { value: unknown; expiresAt: Date }>();

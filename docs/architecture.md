@@ -294,6 +294,25 @@ Atlas search_flights / search_return_flights tools ───┤
 - Offers carry their source name, retrieval time, provider ID, and an optional `bookingUrl`.
   Results can carry `priceInsights` (the source's own view of the route's prices) and `cached`.
 
+### Place names
+
+Both providers read From and To with the same rules (`src/lib/domain/flight-places.ts`) and
+resolve the two together (`resolveRoute` in `src/server/flights/places.ts`):
+
+- Codes: a 3-letter code in any case, a list ("JFK, LGA", "JFK or LGA"), or a code in a label
+  ("Boston (BOS)", "JFK - John F. Kennedy", the placeholder's own "New York or JFK").
+- Names: notes in brackets are dropped ("New York City (Vaughn)" is looked up as "New York City"),
+  and the part before the first comma is looked up. The rest ("OR", "Portugal") narrows the
+  suggestions, with US state abbreviations spelled out.
+- Among suggestions named what was typed, a city with its own airport wins over towns that only
+  have one nearby (Lisbon, Portugal over Lisbon, Maine). Two or more such cities are ambiguous
+  unless the first has more airports of its own than any other; otherwise the source's first
+  suggestion is used.
+- An ambiguous or unknown place throws a `RouteLookupError` with one issue per field and no flight
+  search. The service turns it into a validation error with `fieldErrors` and, for ambiguous names,
+  `fieldChoices` (label and the value that picks it). The panel shows both under the field, and
+  picking a choice searches again. Atlas gets the same message, choices included.
+
 ### SerpApi (Google Flights)
 
 - Requests go to `GET /search.json` with `engine=google_flights`: `departure_id` and `arrival_id`
@@ -301,9 +320,11 @@ Atlas search_flights / search_return_flights tools ───┤
   way, `adults`, `travel_class` (1 to 4), `stops` (SerpApi's 1 nonstop, 2 up to one stop, 3 up to
   two), `currency=USD`, `hl=en`, `gl=us`, and `api_key`. The key is only ever in that query string;
   error messages and logs never include the URL.
-- City names are resolved with `engine=google_flights_autocomplete`; every airport of the best
-  suggestion is searched (New York becomes JFK, LGA, EWR). Lookups are cached for 30 days in the
-  same store. 3-letter codes pass through.
+- City names are resolved with `engine=google_flights_autocomplete`, and every airport of the
+  chosen suggestion is searched (New York becomes JFK, LGA, EWR). The suggestions are cached for 30
+  days in the same store (`serpapi:suggestions:<name>`), so a pick between candidates costs no
+  second lookup. 3-letter codes in any case need no lookup; a metro code is searched as its
+  airports (NYC becomes JFK, LGA, EWR), because Google Flights takes airport codes.
 - `best_flights` and `other_flights` are merged, validated item by item (items without a price or
   readable times are dropped), sorted by price, and capped at ten. Prices are Google's totals for
   all travelers. Segment times (`YYYY-MM-DD HH:MM`, local to each airport) become the app's local
@@ -333,7 +354,8 @@ never blocks a search.
 ### Duffel (test mode)
 
 - The Duffel adapter sends `Duffel-Version: v2`. It resolves city names with
-  `GET /places/suggestions` (3-letter codes pass through) and searches with
+  `GET /places/suggestions` (3-letter codes, metro codes included, pass through in upper case) and
+  searches with
   `POST /air/offer_requests?return_offers=true&supplier_timeout=15000`: one slice per direction, one
   adult passenger per traveler, `cabin_class`, and `max_connections` for the stop limit. Offers are
   validated one by one (malformed offers are dropped), sorted by price, and capped at ten. Prices

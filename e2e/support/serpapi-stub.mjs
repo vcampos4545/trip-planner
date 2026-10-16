@@ -13,22 +13,63 @@ const KEY = "serpapi_e2e_stub_key";
 const GOOGLE_URL =
   "https://www.google.com/travel/flights?hl=en&gl=us&curr=USD&tfs=e2e-stub";
 
+const NEW_YORK = {
+  name: "New York",
+  type: "city",
+  id: "/m/02_286",
+  airports: [
+    {
+      name: "John F. Kennedy International Airport",
+      id: "JFK",
+      city: "New York",
+    },
+    { name: "LaGuardia Airport", id: "LGA", city: "New York" },
+  ],
+};
+
+/** Autocomplete suggestions by query, best first, as Google Flights orders them. */
 const PLACES = {
-  "new york": {
-    name: "New York",
-    type: "city",
-    id: "/m/02_286",
-    airports: [
-      { name: "John F. Kennedy International Airport", id: "JFK" },
-      { name: "LaGuardia Airport", id: "LGA" },
-    ],
-  },
-  lisbon: {
-    name: "Lisbon",
-    type: "city",
-    id: "/m/04llb",
-    airports: [{ name: "Humberto Delgado Airport", id: "LIS" }],
-  },
+  "new york": [NEW_YORK],
+  "new york city": [NEW_YORK],
+  lisbon: [
+    {
+      name: "Lisbon",
+      type: "city",
+      id: "/m/04llb",
+      airports: [
+        { name: "Humberto Delgado Airport", id: "LIS", city: "Lisbon" },
+      ],
+    },
+    {
+      name: "Lisbon, Maine",
+      type: "city",
+      id: "/m/0tnkv",
+      airports: [
+        { name: "Portland International Jetport", id: "PWM", city: "Portland" },
+      ],
+    },
+  ],
+  // Two cities with their own airport: the app asks which one.
+  portland: [
+    {
+      name: "Portland, Oregon",
+      type: "city",
+      description: "City in Oregon",
+      id: "/m/02frhbc",
+      airports: [
+        { name: "Portland International Airport", id: "PDX", city: "Portland" },
+      ],
+    },
+    {
+      name: "Portland, Maine",
+      type: "city",
+      description: "City in Maine",
+      id: "/m/0fvxg",
+      airports: [
+        { name: "Portland International Jetport", id: "PWM", city: "Portland" },
+      ],
+    },
+  ],
 };
 
 const stats = { google_flights: 0, google_flights_autocomplete: 0 };
@@ -38,6 +79,7 @@ const CITIES = {
   LGA: "New York",
   EWR: "New York",
   LIS: "Lisbon",
+  PDX: "Portland",
   SLC: "Salt Lake City",
 };
 
@@ -207,10 +249,16 @@ function flights(params) {
     airports: [
       {
         departure: [
-          { airport: { id: from, name: `${from} Airport` }, city: "New York" },
+          {
+            airport: { id: from, name: `${from} Airport` },
+            city: CITIES[from] ?? from,
+          },
         ],
         arrival: [
-          { airport: { id: to, name: `${to} Airport` }, city: "Lisbon" },
+          {
+            airport: { id: to, name: `${to} Airport` },
+            city: CITIES[to] ?? to,
+          },
         ],
       },
     ],
@@ -248,10 +296,13 @@ const server = createServer((request, response) => {
   const engine = params.get("engine");
   if (engine in stats) stats[engine] += 1;
   if (engine === "google_flights_autocomplete") {
-    const place = PLACES[(params.get("q") ?? "").toLowerCase()];
+    const places = PLACES[(params.get("q") ?? "").toLowerCase()] ?? [];
     send(response, 200, {
       search_metadata: { status: "Success" },
-      suggestions: place ? [{ position: 1, ...place }] : [],
+      suggestions: places.map((place, index) => ({
+        position: index + 1,
+        ...place,
+      })),
     });
     return;
   }

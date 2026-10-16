@@ -116,3 +116,4 @@ export type {
   FlightSearchResult,
 } from "./types";
 export { FlightProviderError, FlightSearchUnavailableError } from "./types";
+export { RouteLookupError, type PlaceField, type PlaceIssue } from "./places";

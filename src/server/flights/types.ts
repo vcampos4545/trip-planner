@@ -6,7 +6,7 @@ import type {
 } from "@/lib/flights";
 
 export type FlightSearchQuery = {
-  /** A 3-letter IATA airport or city code, or a place name the provider resolves. */
+  /** A 3-letter IATA airport or city code (any case), or a place name the provider resolves. */
   origin: string;
   destination: string;
   departureDate: string;
@@ -34,6 +34,7 @@ export type FlightProviderErrorKind =
   | "rate_limit"
   | "invalid_request"
   | "unknown_place"
+  | "ambiguous_place"
   | "unavailable"
   | "timeout"
   | "bad_response";
