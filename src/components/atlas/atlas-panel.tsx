@@ -100,17 +100,26 @@ export function AtlasPanelProvider({
       {!open ? (
         <Button
           size="lg"
-          className="fixed right-4 bottom-4 z-40 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-6"
+          className="fixed right-4 bottom-4 z-40 size-12 rounded-full shadow-lg sm:right-6 sm:bottom-6 sm:size-auto sm:h-9 sm:px-4"
           onClick={() => openAtlas()}
         >
-          <Sparkles aria-hidden />
-          Ask {ASSISTANT_NAME}
+          <Sparkles className="size-5 sm:size-4" aria-hidden />
+          {/* Icon only on phones, so the button covers less of the page. */}
+          <span className="sr-only sm:not-sr-only">Ask {ASSISTANT_NAME}</span>
         </Button>
       ) : null}
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent
           side="right"
           className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
+          onOpenAutoFocus={(event) => {
+            // Start in the message box rather than on the first header button.
+            const message = document.getElementById("atlas-message");
+            if (message instanceof HTMLTextAreaElement && !message.disabled) {
+              event.preventDefault();
+              message.focus();
+            }
+          }}
         >
           <SheetHeader className="flex-row items-center gap-2 border-b pr-12">
             <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
