@@ -31,7 +31,7 @@ test("Flow H: Google Flights via SerpApi is labelled, cached, loads returns on r
   const start = await stubSearches();
 
   // 1. The panel names the real source and is not labelled as test data.
-  await page.goto(`/trips/${tripId}/options`);
+  await page.goto(`/trips/${tripId}/bookings`);
   const panel = page.getByTestId("flight-search-panel");
   await expect(panel).toContainText("Results from Google Flights via SerpApi");
   await expect(panel).not.toContainText("Test data");
@@ -108,10 +108,11 @@ test("Flow H: Google Flights via SerpApi is labelled, cached, loads returns on r
   await expect(roundTrip.getByTestId("flight-pending-return")).toHaveCount(0);
 
   // 5. Saving keeps the source, price, link, and retrieval time; nothing is booked.
-  await roundTrip.getByRole("button", { name: "Save to options" }).click();
+  await roundTrip.getByRole("button", { name: "Save to options only" }).click();
   await expect(
     page.getByText("Saved to options for the group to review."),
   ).toBeVisible();
+  await page.goto(`/trips/${tripId}/options`);
   const card = page.getByTestId("option-card").filter({ hasText: "Stub Air" });
   await expect(card).toContainText("Suggested");
   await expect(card).toContainText("$1,220");
@@ -138,7 +139,7 @@ test("Flow H: Google Flights via SerpApi is labelled, cached, loads returns on r
       prisma.activityLog.count({ where: { tripId } }),
     ]);
   const before = await counts();
-  await page.goto(`/trips/${tripId}/options`);
+  await page.goto(`/trips/${tripId}/bookings`);
   await panel.getByLabel("From", { exact: true }).fill("JFK");
   await panel.getByLabel("To", { exact: true }).fill("QQQ");
   await panel.getByRole("button", { name: "Search flights" }).click();
@@ -157,10 +158,12 @@ test("Flow H: Google Flights via SerpApi is labelled, cached, loads returns on r
   expect(await counts()).toEqual(before);
 
   // 7. Atlas uses the same provider and names it, with no test-data label.
-  await page.goto(`/trips/${tripId}/plan`);
+  await page.getByRole("button", { name: "Ask Atlas", exact: true }).click();
+  await page.getByRole("button", { name: "Where Atlas works from" }).click();
   await expect(page.getByTestId("flight-search-status")).toContainText(
     "Flight search: Google Flights via SerpApi",
   );
+  await page.keyboard.press("Escape");
   await page
     .getByRole("textbox", { name: "Message" })
     .fill("Can you find flights from JFK for the start of the trip?");

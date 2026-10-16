@@ -34,8 +34,10 @@ test("Flow A: a new user creates a trip by describing it to Atlas and can come b
     );
   await page.getByRole("button", { name: "Send message" }).click();
 
-  // 5. Details are extracted and a trip is created; the conversation continues on the trip.
-  await page.waitForURL(/\/trips\/(?!new)[^/]+\/plan$/);
+  // 5. Details are extracted and a trip is created; the conversation continues on the trip, in
+  //    the Atlas panel.
+  await page.waitForURL(/\/trips\/(?!new)[^/?]+\?atlas=open$/);
+  await expect(page.getByRole("dialog", { name: "Atlas" })).toBeVisible();
   await expect(page.getByTestId("trip-title")).toHaveText("Lisbon trip");
   await expect(
     page.getByText(/Lisbon in late May with four of you/),
@@ -68,14 +70,20 @@ test("Flow A: a new user creates a trip by describing it to Atlas and can come b
   await page.goto("/trips");
   await page.getByRole("link", { name: "Lisbon trip" }).click();
   await expect(page.getByText("Lisbon (tentative)").first()).toBeVisible();
-  await page.getByRole("link", { name: "Plan with AI" }).click();
-  await page.waitForURL(/\/plan$/);
   await page.reload();
+  await page.getByRole("button", { name: "Ask Atlas", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Atlas" });
   await expect(
-    page.getByText("We want to go to Lisbon in late May"),
+    panel.getByText("We want to go to Lisbon in late May"),
   ).toBeVisible();
   await expect(
-    page.getByText(/Lisbon in late May with four of you/),
+    panel.getByText(/Lisbon in late May with four of you/),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await page.getByRole("link", { name: "Tasks & decisions" }).click();
+  await expect(
+    page.getByRole("button", { name: "Ask Atlas", exact: true }),
   ).toBeVisible();
   await page.getByRole("link", { name: "Overview" }).click();
   await expect(page.getByText("Group size")).toBeVisible();
@@ -100,6 +108,6 @@ test("Flow A: details can be edited directly without asking Atlas", async ({
   await page
     .getByRole("button", { name: "Create trip with these details" })
     .click();
-  await page.waitForURL(/\/trips\/(?!new)[^/]+\/plan$/);
+  await page.waitForURL(/\/trips\/(?!new)[^/?]+\?atlas=open$/);
   await expect(page.getByTestId("trip-title")).toHaveText("Somewhere warm");
 });
