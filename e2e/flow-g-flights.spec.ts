@@ -22,7 +22,7 @@ test("Flow G: flight search shows labelled Duffel test data, saves with provenan
   // 1. The panel sits in Bookings > Flights and is prefilled from the trip. Options points to it.
   await page.goto(`/trips/${tripId}/options`);
   await expect(page.getByTestId("flight-search-panel")).toHaveCount(0);
-  await page.getByRole("link", { name: "Search flights in Bookings" }).click();
+  await page.getByRole("link", { name: "Search flights", exact: true }).click();
   await page.waitForURL(/\/bookings#flights$/);
   const panel = page.getByTestId("flight-search-panel");
   await expect(panel).toContainText("Test data");

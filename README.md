@@ -41,6 +41,12 @@ treating each chat as a one-off.
   Atlas proposes to something already set can be accepted or declined right in the chat.
 - **Flight search in Bookings.** Bookings > Flights has the flight search. Saving a result as
   considering adds a flight booking with you as considering.
+- **Stay search in Bookings.** Bookings > Accommodations searches hotels and vacation rentals on
+  Google Hotels (through the same SerpApi key as flights), prefilled from a stop's place and
+  dates and the group size. **Add from link** keeps a listing from Airbnb, Vrbo, Booking.com, or
+  any other site: the app names the site from the link and you type the price and details. Ask
+  Atlas to "find a 4-bedroom place near Park City for March 5-7" and it answers from the same
+  search. See [Stay search](#stay-search).
 - **Itinerary week view.** The itinerary opens on a calendar week (days as columns, hours as rows,
   an all-day lane on top). It shows itinerary items, everyone's flights labelled Booked or
   Considering per traveler, ground legs, and stays, with a "Who's flying when" strip. Phones start
@@ -78,7 +84,8 @@ Architecture notes and extension points live in [docs/architecture.md](docs/arch
 - Docker, for the local PostgreSQL container
 - A Google Cloud OAuth client to sign in (instructions below)
 - Optional: an OpenAI API key to turn on Atlas
-- Optional: a free SerpApi key to turn on flight search (Google Flights results)
+- Optional: a free SerpApi key to turn on flight and stay search (Google Flights and Google
+  Hotels results)
 
 ## Local setup
 
@@ -366,6 +373,55 @@ data. If Atlas leaves that out, the app adds the notice to the reply. Live token
   messages later.
 - Without a key or token, the panel and Atlas say flight search is not configured.
 
+## Stay search
+
+Bookings > Accommodations has a stay search panel, and Atlas has `search_stays` and
+`save_stay_option` tools that use the same service. It uses [SerpApi's Google Hotels
+API](https://serpapi.com/google-hotels-api) with the same `SERPAPI_API_KEY` as flight search, so
+both share the account's quota (about 250 searches a month and 50 an hour on the free plan) and
+the same `SERPAPI_CACHE_HOURS` cache. Set `STAYS_PROVIDER="none"` to turn stay search off while
+keeping flight search. The info button in the Atlas panel shows "Stay search: Google Hotels via
+SerpApi" when it is on.
+
+How it behaves:
+
+- The search is prefilled from the trip's stops (pick one to fill in its place and dates), or the
+  destination and trip dates, and the group size. Choose **Hotel** or **Vacation rental**,
+  optionally a minimum number of bedrooms (rentals only), a nightly price range in US dollars, and
+  a sort order. Each search is one SerpApi search; an identical search within the cache window
+  reuses the saved results and says so.
+- Results show the name, whether it is a hotel or a vacation rental (a hotel search can include
+  rentals Google lists alongside hotels), the star class and guest rating, the lowest nightly
+  price and the total for the stay in US dollars as Google Hotels showed them (including taxes and
+  fees), the listing sites the prices came from, a photo, the location, and the retrieval time.
+  Places without a price for the dates are left out, and sponsored results are marked. Prices can
+  change before booking.
+- Google Hotels prices a stay for the number of guests and has no room-count filter, so check how
+  many rooms or beds a price covers before you book.
+- Each result links to the place on Google's hotel search to book, and to the property's own site
+  when Google lists one. The app never books.
+- **Save as considering** adds an accommodation booking that is "Not booked yet" with you marked
+  as considering, plus the place as a lodging option with its source, price, retrieval time, and
+  coordinates (kept in the option's latitude and longitude for a future map). **Save to options
+  only** keeps just the option. Nothing is ever marked booked by a search. A trip can have as many
+  stays as it needs, and room assignments per traveler are set by editing the booking.
+- An exhausted quota, the hourly limit, and SerpApi errors each show a clear message, and a failed
+  search changes no trip data.
+
+### Add from link (Airbnb, Vrbo, and others)
+
+Airbnb has no public API and its terms prohibit scraping, so the app does not search it or read
+its pages. Instead, **Add from link** takes any listing link. The app recognizes the site from the
+link (Airbnb, Vrbo, Booking.com, Expedia, Hotels.com, the big hotel chains, or the site's own name
+for anything else), suggests a name when the link carries one, and never opens the page. You
+enter the name, dates, price (total or per night), currency, and who is staying. It is saved as an
+accommodation booking, as considering unless you tick **Already booked**, with a note saying the
+details were entered by hand from that site.
+
+Atlas records a stay you say you already booked with `record_booking`, whether it came from a
+search it showed ("we booked the Old Town chalet") or somewhere else ("we booked an Airbnb on Main
+Street").
+
 ## Environment variables
 
 | Variable                         | Required    | Purpose                                                         |
@@ -385,7 +441,8 @@ data. If Atlas leaves that out, the app adds the notice to the reply. Live token
 | `OPENAI_WEB_SEARCH_MODEL`        | No          | Model for web searches. Defaults to `OPENAI_MODEL`              |
 | `OPENAI_WEB_SEARCH_CONTEXT_SIZE` | No          | `low` (default), `medium`, or `high` search context             |
 | `FLIGHT_PROVIDER`                | No          | `serpapi` (default), `duffel`, or `none` to turn flights off    |
-| `SERPAPI_API_KEY`                | For flights | SerpApi key for Google Flights results. Empty turns flights off |
+| `SERPAPI_API_KEY`                | For flights | SerpApi key for Google Flights and Google Hotels results        |
+| `STAYS_PROVIDER`                 | No          | `serpapi` (default) or `none` to turn stay search off           |
 | `SERPAPI_CACHE_HOURS`            | No          | Hours to reuse identical SerpApi searches (0 to 24). Default 3  |
 | `SERPAPI_API_URL`                | No          | SerpApi base URL. The end-to-end tests point it at a stub       |
 | `DUFFEL_ACCESS_TOKEN`            | For Duffel  | Duffel test token (`duffel_test_...`)                           |
@@ -423,25 +480,27 @@ Only `NEXT_PUBLIC_APP_NAME` reaches the browser. Everything else stays on the se
 
 - `pnpm test` runs two Vitest projects. `unit` covers pure logic (budget math, trip-detail
   patching, follow-up priorities, lifecycle rules, schemas, the OpenAI request mapping and the
-  OpenAI web search provider, and the SerpApi and Duffel flight providers and the flight search
-  cache against mocked clients, stop changes and validation, the theme question, matching a
+  OpenAI web search provider, the SerpApi and Duffel flight providers, the SerpApi Google Hotels
+  stay provider, and the search cache against mocked clients, listing-link recognition, stop
+  changes and validation, the theme question, matching a
   purchase to flights shown earlier, and the calendar layout). `integration` runs against
   `trip_planner_test` and covers authorization, invitations (links, email-bound invitations with
   a recording email provider, who may invite, resend, revoke, and rate limits), membership
-  changes and the leave rules, concurrency, saving flights, the
-  database search cache, and the Atlas orchestrator with a scripted provider, including a replay
+  changes and the leave rules, concurrency, saving flights and stays, adding a stay from a link,
+  the database search cache, and the Atlas orchestrator with a scripted provider, including a replay
   of a multi-stop ski trip with a friend's rides and flights bought after earlier searches.
 - `pnpm test:e2e` runs Playwright against a production build and the test database. Install the
   browser once with `pnpm exec playwright install chromium`. It starts eight local processes on
   ports 3310 to 3314 and 3317 to 3319: the app with Atlas pointed at a local OpenAI stub and flight
   search pointed at a local Duffel stub (3310), the app with no AI key and no flight key (3311), the
   app with OpenAI web search served by the stub (3312), the app with web search selected but no key
-  (3313), the app with Atlas and flight search pointed at a local SerpApi stub (3314), the SerpApi
-  stub (3317), the Duffel stub (3318), and the OpenAI stub (3319). No test calls the real OpenAI,
+  (3313), the app with Atlas and flight and stay search pointed at a local SerpApi stub (3314), the
+  SerpApi stub (3317), the Duffel stub (3318), and the OpenAI stub (3319). No test calls the real OpenAI,
   SerpApi, Duffel, or Resend API, and the end-to-end servers run without an email key. Test users get sessions inserted directly into the test database; the app
   has no test-only sign-in route. Flow I replays the Park City trip end to end through the stubs
   and checks Bookings > Flights, the week view, and that nothing mentions a group on a one-person
-  trip.
+  trip. Flow K covers stay search, the cache, saving as considering, quota errors, adding a stay
+  from an Airbnb link, and Atlas finding a 4-bedroom place.
 
 Both suites refuse to run against a database whose name does not end in `_test`.
 

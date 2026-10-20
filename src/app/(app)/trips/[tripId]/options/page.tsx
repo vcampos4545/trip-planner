@@ -102,13 +102,21 @@ export default async function OptionsPage({
         data-testid="flight-search-pointer"
       >
         <Plane className="size-4" aria-hidden />
-        Looking for flights?
+        Looking for flights or a place to stay?
         <Link
           href={`/trips/${tripId}/bookings#flights` as Route}
           className="font-medium text-primary hover:underline"
         >
-          Search flights in Bookings
+          Search flights
         </Link>
+        or
+        <Link
+          href={`/trips/${tripId}/bookings#stays` as Route}
+          className="font-medium text-primary hover:underline"
+        >
+          search stays
+        </Link>
+        in Bookings.
       </p>
       <OptionsToolbar />
       {options.length === 0 ? (

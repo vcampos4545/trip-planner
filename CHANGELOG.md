@@ -71,8 +71,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Activity entries for invitations sent, accepted, and revoked, invite settings, and role changes.
   Creating invitations and sending invitation emails are rate limited per user.
 
+- Stay search in Bookings > Accommodations with Google Hotels results through SerpApi, using the
+  same `SERPAPI_API_KEY`, quota, and search cache as flight search. Search hotels or vacation
+  rentals by place, dates, guests, minimum bedrooms (rentals), nightly price range, and sort,
+  prefilled from a stop, the trip's dates, and the group size. Results show the name, type,
+  rating, photo, location, nightly and total price in US dollars as Google showed them, the sites
+  the prices came from, and the retrieval time, labelled "Google Hotels via SerpApi", with a link
+  to book on Google's hotel search. Turn it off with `STAYS_PROVIDER="none"`.
+- **Save as considering** adds a "Not booked yet" accommodation booking with you considering it,
+  plus a lodging option that keeps the source, price, retrieval time, and coordinates (in the
+  option's latitude and longitude). **Save to options only** keeps just the option. Nothing is
+  booked through the app.
+- **Add from link** for Airbnb, Vrbo, Booking.com, or any other listing. The app names the site
+  from the link and never opens the page; you enter the name, dates, price, currency, and who is
+  staying, and it is saved as considering or, if you say so, as booked.
+- Atlas `search_stays` and `save_stay_option` tools that use the same service and answer only
+  from returned results, and `record_booking` records a stay you booked from a search Atlas showed
+  (`fromShownStay`) or from what you say, with its location and address.
+
 ### Changed
 
+- Flight and stay search share one SerpApi client (`src/server/serpapi/client.ts`) and one search
+  cache helper. The quota message now says the quota is shared by flight and stay search.
+- The Options tab points to both flight and stay search in Bookings.
 - Atlas opens as a panel from an **Ask Atlas** button on every trip tab instead of having its own
   Plan with AI tab. The "Try asking" suggestions stay, and "Where Atlas works from" moved behind a
   small info button. Old Plan with AI links open the panel.

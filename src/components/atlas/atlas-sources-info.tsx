@@ -8,6 +8,7 @@ export function AtlasSourcesInfo({
   counts,
   research,
   flights,
+  stays,
 }: {
   route: string;
   dates: string;
@@ -21,6 +22,7 @@ export function AtlasSourcesInfo({
   flights:
     | { configured: true; label: string; testMode: boolean }
     | { configured: false };
+  stays: { configured: true; label: string } | { configured: false };
 }) {
   const rows: [string, React.ReactNode][] = [
     ["Where", route],
@@ -83,6 +85,13 @@ export function AtlasSourcesInfo({
             </p>
           ) : (
             <Pill tone="neutral">Flight search not configured</Pill>
+          )}
+        </div>
+        <div data-testid="stay-search-status">
+          {stays.configured ? (
+            <Pill tone="confirmed">Stay search: {stays.label}</Pill>
+          ) : (
+            <Pill tone="neutral">Stay search not configured</Pill>
           )}
         </div>
       </div>

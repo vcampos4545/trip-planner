@@ -22,6 +22,13 @@ import type {
 } from "@/lib/flights";
 import { centsToDecimal } from "@/lib/money";
 
+import {
+  SERPAPI_URL,
+  SerpApiClient,
+  serpApiError as sharedSerpApiError,
+  type SerpApiCopy,
+} from "@/server/serpapi/client";
+
 import type { FlightCacheStore } from "./cache";
 import { fromPick, resolveRoute, unknownPlace } from "./places";
 import {
@@ -40,12 +47,11 @@ import {
  * an hour), so a round trip is searched once and its return options are loaded only on request.
  */
 
-export const SERPAPI_URL = "https://serpapi.com";
+export { SERPAPI_URL };
 export const SERPAPI_SOURCE_NAME = "Google Flights via SerpApi";
 export const PRICE_INSIGHTS_SOURCE = "Google Flights";
 export const MAX_FLIGHT_OFFERS = 10;
 const CURRENCY = "USD";
-const REQUEST_TIMEOUT_MS = 30_000;
 // Place names map to the same airports for a long time, so a lookup is reused for a month.
 const PLACE_CACHE_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_AIRPORTS_PER_PLACE = 6;
@@ -143,7 +149,15 @@ const autocompleteSchema = z.object({
   error: z.string().nullish(),
 });
 
-const errorSchema = z.object({ error: z.string() });
+/** How flight search names itself when SerpApi fails. */
+export const FLIGHT_COPY: SerpApiCopy<FlightProviderError> = {
+  service: "Google Flights",
+  searches: "flight searches",
+  quotaFallback:
+    "Saved flights still work, and you can still add flights you find yourself.",
+  invalidHint: "Check the airports and dates.",
+  toError: (kind, message) => new FlightProviderError(kind, message),
+};
 
 type SerpItem = z.infer<typeof itemSchema>;
 type SerpSearch = z.infer<typeof searchSchema>;
@@ -161,16 +175,12 @@ export class SerpApiFlightProvider implements FlightSearchProvider {
   readonly id = "serpapi";
   readonly label = SERPAPI_SOURCE_NAME;
   readonly testMode = false;
-  private readonly apiKey: string;
-  private readonly baseUrl: string;
-  private readonly fetchImpl: typeof fetch;
+  private readonly client: SerpApiClient<FlightProviderError>;
   private readonly now: () => Date;
   private readonly placeCache?: FlightCacheStore;
 
   constructor(options: SerpApiOptions) {
-    this.apiKey = options.apiKey;
-    this.baseUrl = (options.baseUrl || SERPAPI_URL).replace(/\/+$/, "");
-    this.fetchImpl = options.fetch ?? fetch;
+    this.client = new SerpApiClient(options, FLIGHT_COPY);
     this.now = options.now ?? (() => new Date());
     this.placeCache = options.placeCache;
   }
@@ -468,47 +478,11 @@ export class SerpApiFlightProvider implements FlightSearchProvider {
     };
   }
 
-  private async request(
+  private request(
     params: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const url = new URL(`${this.baseUrl}/search.json`);
-    for (const [key, value] of Object.entries(params))
-      url.searchParams.set(key, value);
-    // The key travels in the query string as SerpApi requires. The URL is never logged.
-    url.searchParams.set("api_key", this.apiKey);
-    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-    let response: Response;
-    try {
-      response = await this.fetchImpl(url, {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        (error.name === "AbortError" || error.name === "TimeoutError")
-      ) {
-        throw new FlightProviderError(
-          "timeout",
-          "Google Flights (via SerpApi) took too long to respond. Try again in a moment.",
-        );
-      }
-      throw new FlightProviderError(
-        "unavailable",
-        "Couldn't reach SerpApi. Try again in a moment.",
-      );
-    }
-    let json: unknown = null;
-    try {
-      json = await response.json();
-    } catch {
-      json = null;
-    }
-    if (!response.ok) throw serpApiError(response.status, json);
-    if (json === null) throw badResponse();
-    return json;
+    return this.client.request(params, signal);
   }
 }
 
@@ -639,7 +613,7 @@ function offerIdFor(
 }
 
 function badResponse() {
-  return new FlightProviderError(
+  return FLIGHT_COPY.toError(
     "bad_response",
     "SerpApi sent a response the app couldn't read. Try again in a moment.",
   );
@@ -647,34 +621,7 @@ function badResponse() {
 
 /** Maps a SerpApi error to a message a traveler can act on. The key never appears in it. */
 export function serpApiError(status: number, body: unknown) {
-  const parsed = errorSchema.safeParse(body);
-  const detail = parsed.success ? parsed.data.error.trim() : "";
-  if (status === 401 || status === 403) {
-    return new FlightProviderError(
-      "auth",
-      "SerpApi rejected the server's API key. Ask whoever runs this app to check SERPAPI_API_KEY.",
-    );
-  }
-  if (status === 429) {
-    return new FlightProviderError(
-      "rate_limit",
-      /run out of searches|searches for the month|plan/i.test(detail)
-        ? "The app's SerpApi account has used all of its flight searches for now (the free plan allows about 250 a month). Saved flights still work. Try again after the quota resets, or add flights you find yourself."
-        : "Too many flight searches in the last hour (SerpApi's free plan allows about 50 an hour). Wait a while and try again.",
-    );
-  }
-  if (status === 400) {
-    return new FlightProviderError(
-      "invalid_request",
-      detail
-        ? `Google Flights couldn't run this search: ${detail.replace(/api_key\S*/gi, "").slice(0, 240)}`
-        : "Google Flights couldn't run this search. Check the airports and dates.",
-    );
-  }
-  return new FlightProviderError(
-    "unavailable",
-    "SerpApi is having trouble right now. Try the search again in a moment.",
-  );
+  return sharedSerpApiError(status, body, FLIGHT_COPY);
 }
 
 async function readCache(
